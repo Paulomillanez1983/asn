@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="34%" r="78%">
+    <stop offset="0" stop-color="#12213f"/>
+    <stop offset="58%" stop-color="#0a1428"/>
+    <stop offset="100%" stop-color="#050a14"/>
+  </radialGradient>
+  <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+    <stop offset="55%" stop-color="#2f6dff" stop-opacity=".24"/>
+    <stop offset="100%" stop-color="#2f6dff" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="yel" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFDE59"/><stop offset="100%" stop-color="#F5A80C"/>
+  </linearGradient>
+  <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FF7A3D"/><stop offset="100%" stop-color="#EE2D1C"/>
+  </linearGradient>
+  <linearGradient id="blu" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#5AA8FF"/><stop offset="100%" stop-color="#1D3ED8"/>
+  </linearGradient>
+  <linearGradient id="shd" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#D8E4FA"/>
+  </linearGradient>
+  <radialGradient id="cone" cx="50%" cy="50%" r="50%">
+    <stop offset="0" stop-color="#9EC5FF" stop-opacity=".92"/>
+    <stop offset="45%" stop-color="#4E8BFF" stop-opacity=".42"/>
+    <stop offset="100%" stop-color="#2F6DFF" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#CFE2FF" stop-opacity=".85"/>
+    <stop offset="100%" stop-color="#CFE2FF" stop-opacity="0"/>
+  </linearGradient>
+  <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur stdDeviation="9"/>
+  </filter>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="3.2" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <clipPath id="inner"><circle cx="256" cy="256" r="151"/></clipPath>
+  <style>
+    .spin  { transform-origin:256px 256px; animation: rot 4s linear infinite; }
+    .spin2 { transform-origin:256px 256px; animation: rot 4s linear infinite; }
+    .ping  { transform-origin:256px 256px; animation: ping 2s ease-out infinite; }
+    .ping2 { transform-origin:256px 256px; animation: ping 2s ease-out infinite; animation-delay:-1s; }
+    .breathe { transform-origin:256px 256px; animation: breathe 4s ease-in-out infinite; }
+    @keyframes rot { to { transform: rotate(360deg); } }
+    @keyframes ping {
+      0%   { transform: scale(.62); opacity: .55; }
+      70%  { opacity: 0; }
+      100% { transform: scale(1.12); opacity: 0; }
+    }
+    @keyframes breathe {
+      0%,100% { transform: scale(1); }
+      50%     { transform: scale(1.035); }
+    }
+  </style>
+</defs>
+
+<rect width="512" height="512" rx="96" fill="url(#bg)"/>
+<circle cx="256" cy="256" r="212" fill="url(#halo)"/>
+
+<g clip-path="url(#inner)">
+  <circle class="" cx="256" cy="256" r="152"
+    fill="none" stroke="#8FB6FF" stroke-width="3" opacity=".16"/>
+  <circle class="" cx="256" cy="256" r="152"
+    fill="none" stroke="#8FB6FF" stroke-width="3" opacity=".1"/>
+
+  
+</g>
+
+<g fill="none" stroke-linecap="round" stroke-width="30">
+  <path d="M175.19 414.60 A178 178 0 0 1 78.11 249.79" stroke="url(#yel)" filter="url(#glow)"/>
+  <path d="M85.78 203.96 A178 178 0 0 1 231.23 79.73" stroke="url(#red)" filter="url(#glow)"/>
+  <path d="M280.77 79.73 A178 178 0 0 1 433.89 262.21" stroke="url(#blu)" filter="url(#glow)"/>
+</g>
+
+
+
+<g class="">
+  <path d="M256 152 L336 182 V268 C336 328 300 364 256 384 C212 364 176 328 176 268 V182 Z" fill="#040913" opacity=".55" transform="translate(0,10)" filter="url(#soft)"/>
+  <path d="M256 152 L336 182 V268 C336 328 300 364 256 384 C212 364 176 328 176 268 V182 Z" fill="url(#shd)"/>
+  <g fill="#081226">
+    
+  <circle cx="224" cy="244" r="24"/>
+  <circle cx="256" cy="236" r="30"/>
+  <circle cx="288" cy="246" r="21"/>
+  <rect x="212" y="246" width="88" height="26" rx="13"/>
+
+    <path d="M268 266 L240 308 H258 L248 342 L286 302 H268 L278 266 Z"/>
+  </g>
+</g>
+</svg>
