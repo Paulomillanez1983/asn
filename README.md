@@ -12,6 +12,13 @@ Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, 
 4. **Cuándo.** El próximo evento en las 12 horas: "Lluvia a las 16:00 · en 2 h".
 5. **Tutorial con simulador.** Al entrar aparece una hoja con dos explicaciones ("¿Por qué monitor de inteligencia?" y "¿Qué está viendo?") y un simulador: elegís intensidad de viento (leve, moderado, fuerte) y fenómeno (lluvia, tormenta, granizo, nieve, eléctrico, rayos, eléctrico total) y ves cómo se vería la alerta.
 6. **Lo técnico, escondido.** Modelos, probabilidades, radar y rayos viven en "Ver detalles".
+7. **Instalación y permisos a la vista.** Banner "Instalá ASN 4.0" (con respaldo de instrucciones si el navegador no muestra el diálogo) y "Avisos en tiempo real" con un toque.
+
+### Búsqueda de direcciones
+
+Se consultan tres fuentes en paralelo y se mezclan por prioridad: **Photon/OSM** (calles y alturas), **Nominatim/OSM** (búsqueda estructurada calle + ciudad) y **Open-Meteo Geocoding** (ciudades y barrios). Los duplicados se descartan por nombre y por cercanía.
+
+Límite real: si una altura no está cargada en OpenStreetMap, no existe en ninguna de las tres fuentes. En ese caso la app avisa ("esa altura no está cargada en el mapa") y toma la calle como referencia del barrio.
 
 ## Cómo decide
 
