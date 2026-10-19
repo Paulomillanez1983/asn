@@ -197,9 +197,11 @@ async function sharePage(url, ctx) {
   body{min-height:100vh;display:grid;place-items:center;padding:24px;
     font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#f3f7ff;
     background:radial-gradient(900px 520px at 85% -10%,#16294a,transparent 60%),#070d18}
-  .box{max-width:520px;width:100%;border-radius:26px;padding:28px;
+  .box{display:block;max-width:520px;width:100%;border-radius:26px;padding:28px;
     background:linear-gradient(165deg,#13202f,#0b1524);border:1px solid rgba(255,255,255,.08);
-    box-shadow:0 24px 60px rgba(0,0,0,.55);text-align:center}
+    box-shadow:0 24px 60px rgba(0,0,0,.55);text-align:center;
+    text-decoration:none;color:inherit}
+  .auto{margin-top:12px;font-size:12px;color:#6f83a6}
   .emoji{font-size:64px;line-height:1}
   h1{font-size:26px;margin:14px 0 6px;letter-spacing:-.5px}
   .place{color:#9fb2d1;font-size:14px}
@@ -208,14 +210,17 @@ async function sharePage(url, ctx) {
     background:#2563eb;color:#fff;text-decoration:none;font-weight:650}
   .foot{margin-top:14px;font-size:11px;color:#5d6f92}
 </style></head>
-<body><div class="box">
+<body><a class="box" href="/">
   <div class="emoji">${L.emoji}${level ? '' : '😌'}</div>
   <h1>${esc(level ? L.name : 'Sin alerta')}${level ? ': ' + esc(ph.word) : ''}</h1>
   <div class="place">${esc(name)}${place.a ? ' · ' + esc(place.a) : ''}</div>
   <div class="pct">${fast ? 'Estado al momento de compartir' : 'Próximas 3 horas · ' + pct + '% de ' + n + ' escenarios'}</div>
-  <a class="cta" href="/">Abrir ASN 4.0</a>
+  <span class="cta">Abrir ASN 4.0</span>
   <div class="foot">Pronóstico por conjuntos del IFS · Open-Meteo</div>
-</div></body></html>`;
+  <div class="auto">Abriendo ASN 4.0…</div>
+</a>
+<script>setTimeout(function(){location.replace('/')},3000)</script>
+</body></html>`;
 
   const res = new Response(html, {
     headers: {

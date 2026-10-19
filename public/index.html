@@ -69,7 +69,12 @@ a{color:#93c5fd;text-decoration:none}
   background:linear-gradient(180deg,rgba(7,13,24,.96) 60%,rgba(7,13,24,0));
   backdrop-filter:blur(10px);
 }
-.logo{width:40px;height:40px;border-radius:13px;object-fit:cover;border:1px solid var(--line2);box-shadow:0 8px 20px rgba(0,0,0,.55);flex:none}
+.logo-wrap{position:relative;width:40px;height:40px;border-radius:13px;overflow:hidden;flex:none;
+  background:linear-gradient(150deg,#1d4ed8,#0891b2);display:grid;place-items:center;box-shadow:0 8px 20px rgba(0,0,0,.55)}
+.logo-fb{font-size:10.5px;font-weight:900;letter-spacing:.4px;color:#fff}
+.logo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:13px}
+.boot{display:grid;place-items:center;gap:14px;padding:64px 0;color:var(--dim);font-size:14px}
+.bootspin{width:26px;height:26px;border-radius:50%;border:2px solid #22314c;border-top-color:#60a5fa;animation:spin 1s linear infinite}
 .brand{flex:1;min-width:0}
 .brand h1{font-size:18px;font-weight:800;letter-spacing:-.25px;line-height:1.15}
 .brand .sub{font-size:12.5px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -297,7 +302,7 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 </head>
 <body>
 <header class="top">
-  <img class="logo" src="icon-192.png" alt="ASN 4.0">
+  <span class="logo-wrap"><img class="logo" src="icon-192.png" alt="" onerror="this.remove()"><span class="logo-fb">ASN</span></span>
   <div class="brand">
     <h1>ASN 4.0</h1>
     <div class="sub" id="sub">Alerta Super Niño 4.0</div>
@@ -305,7 +310,9 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
   <button class="icon-btn" id="refresh" aria-label="Actualizar">⟳</button>
   <button class="icon-btn" id="gear" aria-label="Ajustes">⚙️</button>
 </header>
-<main id="view"></main>
+<main id="view">
+  <div class="boot"><div class="bootspin"></div><p>Cargando ASN 4.0…</p></div>
+</main>
 <div class="foot">
   Datos de <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
   direcciones de <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
@@ -399,6 +406,17 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 </div>
 
 <div class="toast" id="toast"></div>
+<script>
+  setTimeout(function () {
+    if (window.__asnBooted) return;
+    var v = document.getElementById('view');
+    if (!v) return;
+    v.innerHTML = '<div class="card" style="margin-top:18px">' +
+      '<b>No pudimos cargar la app</b>' +
+      '<p class="hint" style="margin-top:6px">Revisá la conexión y probá de nuevo.</p>' +
+      '<button onclick="location.reload()" style="margin-top:12px">Recargar</button></div>';
+  }, 9000);
+</script>
 <script src="vendor/gifenc.js" defer></script>
 <script src="radar.js" defer></script>
 <script src="app.js" defer></script>

@@ -1269,10 +1269,13 @@ async function sharePlace(id) {
     p: d0 ? phenomenon(d0).word : '',
     e: d0 ? phenomenon(d0).emoji : ''
   });
-  const url = location.origin + '/alerta/' + token;
+  const stamp = (d0 ? d0.level : 0) + 'h' + Math.floor(Date.now() / 3600000);
+  const url = location.origin + '/alerta/' + token + '?s=' + stamp;
   const d = S.data[id];
   const text = d
-    ? `${LEVELS[d.level].name} · ${phenomenon(d).word} en ${p.label}`
+    ? (d.level === 0
+      ? `Sin alerta en ${p.label}`
+      : `${LEVELS[d.level].name} · ${phenomenon(d).word} en ${p.label}`)
     : `ASN 4.0 · ${p.label}`;
   try {
     if (navigator.share) {
@@ -1736,6 +1739,8 @@ function init() {
     maybeOpenAsk();
     setInterval(maybeOpenAsk, 15000);
   }, 20000);
+
+  window.__asnBooted = true;
 }
 
 document.addEventListener('DOMContentLoaded', init);
