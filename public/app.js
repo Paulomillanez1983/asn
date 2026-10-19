@@ -875,7 +875,7 @@ function viewHome() {
         : '');
   }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
-  return geoAskBanner() + travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
+  return travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
     `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
 }
 
@@ -1137,6 +1137,30 @@ async function checkTravel() {
   paint();
 }
 
+function openMenu() {
+  const el = document.getElementById('menuSheet');
+  if (!el) return;
+  el.hidden = false;
+  updateGeoBtn();
+}
+
+function closeMenu() {
+  const el = document.getElementById('menuSheet');
+  if (el) el.hidden = true;
+}
+
+function updateGeoBtn() {
+  const b = document.getElementById('geoBtn');
+  if (!b) return;
+  b.textContent = S.geoAsked ? 'Revisar mi zona ahora' : 'Activar ubicación';
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'geolocation' }).then(r => {
+      if (r.state === 'granted') b.textContent = 'Revisar mi zona ahora';
+      else if (r.state === 'denied') b.textContent = 'Ubicación bloqueada en el navegador';
+    }).catch(() => { });
+  }
+}
+
 function geoAskBanner() {
   if (S.geoAsked || !('geolocation' in navigator) || !S.places.length) return '';
   return `<div class="banner">
@@ -1153,8 +1177,8 @@ function travelBanner() {
   const label = t.name || 'esta zona';
   return `<div class="banner">
     <div class="bi">📍</div>
-    <div class="bt"><b>Parece que estás en ${esc(label)}</b><span>${t.dist ? 'A ' + t.dist + ' km de tus lugares. ' : ''}¿Querés seguir el clima de acá?</span></div>
-    <button data-travel="add">Sí</button>
+    <div class="bt"><b>Estás en ${esc(label)}</b><span>${t.dist ? 'A ' + t.dist + ' km de tus lugares. ' : ''}Si seguís esta zona, te avisamos de lluvias, ráfagas y crecidas de acá.</span></div>
+    <button data-travel="add">Seguir</button>
     <button class="x2" data-travel="skip" aria-label="Ahora no">✕</button>
   </div>`;
 }
@@ -1762,7 +1786,7 @@ function recordFeedback(p, a) {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-open],#menu,#geoBtn,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -1871,10 +1895,29 @@ document.addEventListener('click', ev => {
     toast('Actualizando…');
     return;
   }
-  if (t.id === 'gear') {
-    S.view = S.view === 'settings' ? 'home' : 'settings';
-    paint();
-    if (S.view === 'home') window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (t.id === 'menu') { openMenu(); return; }
+  if (t.hasAttribute('data-closemenu')) { closeMenu(); return; }
+  if (t.hasAttribute('data-open')) {
+    const k = t.getAttribute('data-open');
+    closeMenu();
+    if (k === 'support') { location.href = '/apoyar.html'; return; }
+    if (k === 'tutorial') { openSheet(); return; }
+    if (k === 'settings') { S.view = 'settings'; paint(); return; }
+    return;
+  }
+  if (t.id === 'geoBtn') {
+    S.geoAsked = true;
+    save();
+    getPosition().then(pos => {
+      updateGeoBtn();
+      if (pos) {
+        closeMenu();
+        checkTravel();
+        toast('Ubicación tomada');
+      } else {
+        toast('No pudimos obtener la ubicación');
+      }
+    });
     return;
   }
   if (t.id === 'back') { S.view = 'home'; paint(); return; }
