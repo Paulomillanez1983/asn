@@ -46,14 +46,18 @@ function load() {
       } catch (e) { }
     }
   }
-  S.places = (Array.isArray(raw.places) ? raw.places : []).map(p => ({
-    id: p.id || uid(),
-    label: p.label || p.name || 'Lugar',
-    addr: p.addr || '',
-    kind: p.kind || 'importante',
-    lat: p.lat,
-    lon: p.lon
-  }));
+  S.places = (Array.isArray(raw.places) ? raw.places : []).map(p => {
+    const out = {
+      id: p.id || uid(),
+      label: p.label || p.name || 'Lugar',
+      addr: p.addr || '',
+      kind: p.kind || 'importante',
+      lat: p.lat,
+      lon: p.lon
+    };
+    if (typeof p.hydro === 'boolean') out.hydro = p.hydro;
+    return out;
+  });
   S.feedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
   S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
@@ -177,7 +181,7 @@ async function postSubscription(sub) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         subscription: sub.toJSON(),
-        places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon }))
+        places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon, hydro: !!p.hydro }))
       })
     });
   } catch (e) { }
@@ -465,6 +469,15 @@ async function fetchPlace(p) {
   return { hourly: j.hourly, current: j.current, daily: j.daily || null };
 }
 
+/* Hidrología: caudal (GloFAS) + estaciones INA, vía Worker */
+async function fetchHydro(p) {
+  try {
+    const r = await fetch('/api/hydro?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
 /* Amanecer y atardecer (pedido aparte, sin modelos) */
 async function fetchSun(p) {
   const u = new URL('https://api.open-meteo.com/v1/forecast');
@@ -640,12 +653,15 @@ async function refresh() {
   S.busy = true;
   paint();
   const results = await Promise.allSettled(S.places.map(async p => {
-    const [det, ens, met, sun] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p)]);
+    const [det, ens, met, sun, hyd] = await Promise.allSettled([
+      fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p), fetchHydro(p)
+    ]);
     return {
       det: det.status === 'fulfilled' ? det.value : null,
       ens: ens.status === 'fulfilled' ? ensembleRisk(ens.value) : null,
       met: met.status === 'fulfilled' ? met.value : null,
       sun: sun.status === 'fulfilled' ? sun.value : null,
+      hyd: hyd.status === 'fulfilled' ? hyd.value : null,
       err: det.status !== 'fulfilled' ? det.reason : null
     };
   }));
@@ -662,6 +678,7 @@ async function refresh() {
       agg.sunrise = (r.sun && r.sun.sunrise) || (r.det.daily && r.det.daily.sunrise) || null;
       agg.sunset = (r.sun && r.sun.sunset) || (r.det.daily && r.det.daily.sunset) || null;
       agg.met = r.met;
+      agg.hydro = r.hyd;
       applyLearning(p, agg);
       S.data[p.id] = agg;
       ok++;
@@ -835,7 +852,7 @@ function viewHome() {
         : '');
   }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
-  return installBanner() + notifyBanner() + body + add +
+  return installBanner() + notifyBanner() + hydroAskBanner() + body + add +
     `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
 }
 
@@ -949,6 +966,7 @@ function heroHtml(p) {
 
     <details class="more">
       <summary>Ver detalles</summary>
+      ${hydroHtml(d)}
       <div class="mrow">${d.models.map(x => `<span><i class="dot d${x.l}"></i>${MODEL_NAME[x.m]}</span>`).join('')}</div>
       ${probHtml(d)}
       ${barsHtml(d)}
@@ -1018,6 +1036,28 @@ function timelineHtml(d) {
     </div>`;
   }
   return out + '</div>';
+}
+
+function hydroHtml(d) {
+  const h = d.hydro;
+  if (!h || h.q == null) return '';
+  const riverName = String(h.river || 'Río cercano').trim();
+  const q = Number(h.q).toFixed(2);
+  const p90 = h.p90 != null ? Number(h.p90).toFixed(2) : '—';
+  const tone = h.level === 0 ? 'normal' : h.level === 1 ? 'alto' : 'crecida';
+  return `<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p90 ${p90} ·
+    lluvia 48 h ${h.rain48} mm · <b>${tone}</b></div>`;
+}
+
+function hydroAskBanner() {
+  const p = S.places.find(x => x.hydro === undefined);
+  if (!p) return '';
+  return `<div class="banner">
+    <div class="bi">🌊</div>
+    <div class="bt"><b>¿Avisos de crecidas cerca de ${esc(p.label)}?</b><span>Te avisamos si el río sube más de lo normal.</span></div>
+    <button data-hydro="yes" data-place="${p.id}">Sí</button>
+    <button class="x2" data-hydro="no" data-place="${p.id}" aria-label="No">✕</button>
+  </div>`;
 }
 
 function windHtml(d) {
@@ -1612,7 +1652,7 @@ function recordFeedback(p, a) {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -1656,6 +1696,15 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-closegif')) { document.getElementById('gifSheet').hidden = true; return; }
   if (t.id === 'gifShare') { shareGif(); return; }
   if (t.id === 'gifSave') { saveGif(); return; }
+  if (t.hasAttribute('data-hydro')) {
+    const p = S.places.find(x => x.id === t.getAttribute('data-place'));
+    if (p) {
+      p.hydro = t.getAttribute('data-hydro') === 'yes';
+      save(); paint(); syncPush();
+      toast(p.hydro ? 'Avisos de crecidas activados' : 'Sin avisos de crecidas');
+    }
+    return;
+  }
   if (t.hasAttribute('data-kind')) {
     S.addKind = t.getAttribute('data-kind');
     document.querySelectorAll('#kinds button').forEach(b => b.classList.toggle('on', b.dataset.kind === S.addKind));

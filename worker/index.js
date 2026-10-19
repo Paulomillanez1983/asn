@@ -70,7 +70,8 @@ async function api(req, env, url) {
       places,
       last: (prev && prev.last) || {},
       at: (prev && prev.at) || {},
-      ph: (prev && prev.ph) || {}
+      ph: (prev && prev.ph) || {},
+      hydroLast: (prev && prev.hydroLast) || {}
     };
     await env.SUBS.put(key, JSON.stringify(rec));
     return json({ ok: true, id, places: places.length });
@@ -81,6 +82,13 @@ async function api(req, env, url) {
     if (!body || !body.endpoint) return json({ error: 'falta endpoint' }, 400);
     await env.SUBS.delete('sub:' + await hash(body.endpoint));
     return json({ ok: true });
+  }
+
+  if (url.pathname === '/api/hydro' && req.method === 'GET') {
+    const lat = Number(url.searchParams.get('lat'));
+    const lon = Number(url.searchParams.get('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+    return json(await hydroFor(env, lat, lon));
   }
 
   if (url.pathname === '/api/test' && req.method === 'POST') {
@@ -232,6 +240,102 @@ async function sharePage(url, ctx) {
   return res;
 }
 
+/* ---------------- Hidrología: GloFAS + INA ---------------- */
+const INA_STATIONS = 'https://alerta.ina.gob.ar/a5/obs/puntual/estaciones?format=json';
+
+function distKm(a, b, c, d) {
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(c - a), dLon = rad(d - b);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function percentile(arr, p) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(p * s.length))];
+}
+
+async function inaNear(env, lat, lon) {
+  let list = await env.SUBS.get('ina:stations:v2', 'json');
+  if (!list) {
+    try {
+      const r = await fetch(INA_STATIONS, { headers: { accept: 'application/json' } });
+      if (r.ok) {
+        const all = await r.json();
+        list = all.map(s => ({
+          id: s.id, n: (s.nombre || '').trim(), r: s.rio ? String(s.rio).trim() : null, p: s.provincia,
+          lat: s.geom && s.geom.coordinates ? s.geom.coordinates[1] : null,
+          lon: s.geom && s.geom.coordinates ? s.geom.coordinates[0] : null,
+          al: s.nivel_alerta, ev: s.nivel_evacuacion
+        })).filter(s => s.lat != null && s.lon != null);
+        await env.SUBS.put('ina:stations:v2', JSON.stringify(list), { expirationTtl: 86400 });
+      }
+    } catch (e) { }
+  }
+  if (!list) return [];
+  return list
+    .map(s => ({ ...s, d: distKm(lat, lon, s.lat, s.lon) }))
+    .filter(s => s.d <= 80 && s.r)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 3);
+}
+
+async function hydroFor(env, lat, lon) {
+  const key = `hydro:v2:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const hit = await env.SUBS.get(key, 'json');
+  if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
+
+  const out = { at: Date.now(), level: 0, q: null, p90: null, p95: null, rain48: 0, stations: [], river: null, msg: '' };
+
+  try {
+    const u = `https://flood-api.open-meteo.com/v1/flood?latitude=${lat}&longitude=${lon}` +
+      '&daily=river_discharge&past_days=30&forecast_days=3';
+    const j = await (await fetch(u)).json();
+    const arr = (j.daily && j.daily.river_discharge) || [];
+    const past = arr.slice(0, 30).filter(v => v != null);
+    const q = arr[29] != null ? arr[29] : null;
+    out.q = q;
+    out.p90 = percentile(past, 0.9);
+    out.p95 = percentile(past, 0.95);
+  } catch (e) { }
+
+  try {
+    const pts = [[0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4], [0.3, 0.3], [-0.3, -0.3]];
+    const lats = pts.map(p => (lat + p[0]).toFixed(3)).join(',');
+    const lons = pts.map(p => (lon + p[1]).toFixed(3)).join(',');
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}` +
+      '&daily=precipitation_sum&past_days=2&forecast_days=1&timezone=auto';
+    const j = await (await fetch(u)).json();
+    const list = Array.isArray(j) ? j : [j];
+    out.rain48 = Math.round(Math.max(0, ...list.map(x => {
+      const s = (x.daily && x.daily.precipitation_sum) || [];
+      return (s[0] || 0) + (s[1] || 0);
+    })));
+  } catch (e) { }
+
+  try { out.stations = await inaNear(env, lat, lon); } catch (e) { }
+  const st = out.stations[0];
+  out.river = st && st.r ? st.r : 'Río cercano';
+
+  const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
+  let score = 0;
+  if (q != null && p90 && q >= p90) score += 1;
+  if (q != null && p95 && q >= p95 * 1.3) score += 2;
+  if (out.rain48 >= 25) score += 1;
+  if (q != null && p90 && q >= p90 * 1.5 && out.rain48 >= 15) score += 1;
+  out.level = score >= 3 ? 2 : score >= 2 ? 1 : 0;
+
+  out.msg = out.level === 0
+    ? 'Sin señal de crecida'
+    : out.level === 1
+      ? 'Caudal alto para la zona' + (out.rain48 >= 15 ? ' y lluvia reciente aguas arriba' : '')
+      : 'Posible crecida: caudal muy por encima de lo normal';
+
+  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
+  return out;
+}
+
 /* ---------------- Pronóstico ---------------- */
 async function forecast(place) {
   const u = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
@@ -357,6 +461,24 @@ async function runAlerts(env) {
           if (r === 'gone') { gone = true; break; }
           if (r === 'ok') rec.at[tag] = Date.now();
         }
+        if (p.hydro) {
+          const h = await hydroFor(env, p.lat, p.lon);
+          const hk = tag + ':hydro';
+          const hPrev = (rec.hydroLast && rec.hydroLast[hk]) || 0;
+          const hQuiet = quietNow() && h.level < 2;
+          if (h.level >= 1 && h.level > hPrev && !hQuiet) {
+            const r2 = await sendPush(
+              env, rec.sub,
+              '🌊 Posible crecida · ' + (h.river || 'río cercano'),
+              h.msg + ' cerca de ' + tag + '.',
+              'hydro-' + hk
+            );
+            if (r2 === 'gone') { gone = true; break; }
+          }
+          rec.hydroLast = rec.hydroLast || {};
+          rec.hydroLast[hk] = h.level;
+        }
+
         rec.last[tag] = level;
         rec.ph = rec.ph || {};
         rec.ph[tag] = ph.word;
@@ -369,5 +491,6 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
 
 
