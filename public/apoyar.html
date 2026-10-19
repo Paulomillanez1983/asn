@@ -6,7 +6,7 @@
 <title>Apoyar ASN 4.0</title>
 <meta name="theme-color" content="#070d18">
 <meta name="robots" content="noindex">
-<link rel="icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png?v=5">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   :root{--bg:#070d18;--txt:#f2f7ff;--dim:#9fb2d1;--line:rgba(255,255,255,.09);--card:#101b2c}
@@ -28,9 +28,11 @@
   .item .ic{font-size:18px;flex:none;width:24px;text-align:center}
   .item b{display:block;font-size:13.5px}
   .item span{display:block;font-size:12.5px;color:#9fb2d1;line-height:1.5;margin-top:2px}
-  .amounts{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
-  .amounts span{border:1px solid var(--line);background:#152238;color:#dbe7ff;
-    font-size:13px;font-weight:600;padding:8px 12px;border-radius:999px}
+   .trust{display:flex;gap:12px;align-items:flex-start;margin-top:16px;padding:12px 14px;
+     border-radius:14px;background:rgba(52,211,153,.07);border:1px solid rgba(52,211,153,.18)}
+   .trust .ic{font-size:16px;flex:none;line-height:1.4}
+   .trust b{display:block;font-size:13px;color:#a7f3d0}
+   .trust span{display:block;font-size:12px;color:#9fb2d1;line-height:1.5;margin-top:3px}
   .btn{display:block;text-align:center;text-decoration:none;font-weight:700;font-size:15px;
     padding:15px;border-radius:14px;margin-top:12px}
   .btn.mp{background:linear-gradient(150deg,#0ea5e9,#2563eb);color:#fff}
@@ -45,7 +47,7 @@
 <body>
 <div class="wrap">
   <div class="top">
-    <img src="icon-192.png" alt="">
+    <img src="icon-192.png?v=5" alt="">
     <div><b>ASN 4.0</b><span>Alerta Super Niño</span></div>
   </div>
 
@@ -63,14 +65,17 @@
   </div>
 
   <div class="card">
-    <h2>Doná desde el monto que quieras</h2>
-    <p>No hay mínimos, planes ni suscripciones. Lo que puedas: cada aporte suma y va entero al proyecto.</p>
-    <div class="amounts"><span>$500</span><span>$1.000</span><span>$3.000</span><span>otro monto</span></div>
-    <p class="note">Los montos son solo una referencia: el link de pago acepta el importe que vos elijas.</p>
+    <h2>Doná lo que quieras</h2>
+    <p>No hay mínimos, planes ni suscripciones. Cada aporte, del tamaño que sea, suma y va entero al proyecto.</p>
     <a class="btn mp" href="https://link.mercadopago.com.ar/asn40" target="_blank" rel="noopener">Donar con Mercado Pago</a>
     <a class="btn gh" href="https://github.com/sponsors/Paulomillanez1983" target="_blank" rel="noopener">GitHub Sponsors</a>
-    <p class="note">El checkout de Mercado Pago figura a nombre de <b>Vitalis</b>, la cuenta con la que se procesa el cobro.
-      Los pagos se hacen en la página del proveedor: ASN nunca recibe ni guarda datos de tarjetas.</p>
+    <div class="trust">
+      <div class="ic">🔒</div>
+      <div>
+        <b>El cobro lo hace Mercado Pago</b>
+        <span>Los datos de tu tarjeta los ingresás en su sitio. ASN no los ve, no los recibe y no los guarda.</span>
+      </div>
+    </div>
   </div>
 
   <div class="card">
