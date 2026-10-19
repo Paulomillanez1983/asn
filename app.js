@@ -9,10 +9,20 @@ const DEFAULT_TOPIC = 'asn4-cba-7q4m9k2x';
 const INTRO_KEY = 'asn.intro';
 const CBA = { lat: -31.42, lon: -64.18 };
 
+/* Escala de 5 colores (base Météo-France + nivel excepcional morado) */
+const LEVELS = [
+  { key: 'verde', name: 'Sin alerta', emoji: '🟢' },
+  { key: 'amarilla', name: 'Alerta amarilla', emoji: '🟡' },
+  { key: 'naranja', name: 'Alerta naranja', emoji: '🟠' },
+  { key: 'roja', name: 'Alerta roja', emoji: '🔴' },
+  { key: 'morada', name: 'Alerta morada', emoji: '🟣' }
+];
+
 const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
   data: {}, updated: 0, busy: false, view: 'home', results: [],
-  askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false
+  askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
+  askPlace: null, radarResult: null
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -90,8 +100,8 @@ function isStandalone() {
 
 /* ===================== Riesgo ===================== */
 function pointRisk(o) {
-  const a = o.rain < 0.5 ? 0 : o.rain < 2.5 ? 1 : o.rain < 7.6 ? 2 : 3;
-  const b = o.gust < 50 ? 0 : o.gust < 70 ? 1 : o.gust < 90 ? 2 : 3;
+  const a = o.rain < 0.5 ? 0 : o.rain < 2.5 ? 1 : o.rain < 7.6 ? 2 : o.rain < 15 ? 3 : 4;
+  const b = o.gust < 60 ? 0 : o.gust < 80 ? 1 : o.gust < 100 ? 2 : o.gust < 130 ? 3 : 4;
   return { l: Math.max(a, b), rain: a >= 1, wind: b >= 1 };
 }
 
@@ -110,8 +120,9 @@ function modelRisk(H, m) {
     }
     hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0 });
   }
-  lvl = Math.max(lvl, acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
-  return { m, l: lvl, rain, wind, acc, hours };
+  lvl = Math.max(lvl, acc >= 100 ? 4 : acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
+  const rate = Math.max(0, ...hours.slice(0, 3).map(h => h.p || 0));
+  return { m, l: lvl, rain, wind, acc, rate, hours };
 }
 
 function ensembleRisk(H) {
@@ -130,27 +141,26 @@ function ensembleRisk(H) {
   const p = (arr, th) => arr.length ? arr.filter(v => v >= th).length / arr.length : 0;
   return {
     n: ids.length,
-    rain10: p(rains, 10), rain15: p(rains, 15), rain30: p(rains, 30), rain60: p(rains, 60),
-    gust60: p(gusts, 60), gust80: p(gusts, 80), gust100: p(gusts, 100)
+    rain10: p(rains, 10), rain15: p(rains, 15), rain30: p(rains, 30),
+    rain60: p(rains, 60), rain100: p(rains, 100),
+    gust60: p(gusts, 60), gust80: p(gusts, 80), gust100: p(gusts, 100), gust130: p(gusts, 130)
   };
 }
 
 function ensembleLevel(e) {
-  let l = 0;
-  if (e.rain15 >= 0.30) l = Math.max(l, 1);
-  if (e.rain30 >= 0.40) l = Math.max(l, 2);
-  if (e.rain60 >= 0.50) l = Math.max(l, 3);
-  if (e.gust60 >= 0.40) l = Math.max(l, 1);
-  if (e.gust80 >= 0.40) l = Math.max(l, 2);
-  if (e.gust100 >= 0.30) l = Math.max(l, 3);
-  return l;
+  if (e.rain100 >= 0.30 || e.gust130 >= 0.30) return 4;
+  if (e.rain60 >= 0.50 || e.gust100 >= 0.30) return 3;
+  if (e.rain30 >= 0.40 || e.gust80 >= 0.40) return 2;
+  if (e.rain15 >= 0.30 || e.gust60 >= 0.40) return 1;
+  return 0;
 }
 
 function aggregate(H, ens) {
   const models = MODELS.map(m => modelRisk(H, m));
   const sorted = models.map(x => x.l).sort((a, b) => b - a);
-  const detLevel = Math.min(3, Math.max(0, sorted[1] ?? sorted[0] ?? 0));
+  const detLevel = Math.min(4, Math.max(0, sorted[1] ?? sorted[0] ?? 0));
   const votes = { rain: models.filter(x => x.rain).length, wind: models.filter(x => x.wind).length };
+  const rainRate = Math.max(0, ...models.map(m => m.rate));
 
   const capeMax = seriesByBase(H, 'cape')
     .reduce((max, s) => Math.max(max, ...s.slice(0, 3).map(v => v ?? 0)), 0);
@@ -173,39 +183,63 @@ function aggregate(H, ens) {
     snowHours.push(snowSeries.reduce((m, s) => Math.max(m, s[i] ?? 0), 0));
   }
   const snow3 = snowHours.slice(0, 3).reduce((a, b) => a + b, 0);
-  if (snow3 >= 5) level = 3;
+  if (snow3 >= 15) level = 4;
+  else if (snow3 >= 5) level = Math.max(3, level);
   else if (snow3 >= 2) level = Math.max(2, level);
   else if (snow3 >= 0.2) level = Math.max(1, level);
 
   return {
-    models, level: Math.min(3, level), detLevel, eLevel, votes,
+    models, level: Math.min(4, level), detLevel, eLevel, votes, rainRate,
     capeMax, gustMax, freezing, storm, hailPossible, ens, snow3, snowHours
   };
 }
 
 /* ===================== Lenguaje ===================== */
-function levelInfo(d) {
-  if (d.snow3 >= 0.5) {
-    if (d.level >= 3) return { cls: 'lv3', emoji: '❄️', title: 'Nevada fuerte', line: 'Se espera nieve acumulada en tu zona.', action: 'Evitá salir en auto. Abrigate bien.', cta: '🚨' };
-    if (d.level === 2) return { cls: 'lv2', emoji: '🌨️', title: 'Puede nevar', line: 'Hay chances de nieve en las próximas 3 horas.', action: 'Si tenés que salir, hacelo con cuidado.', cta: '⚠️' };
-    return { cls: 'lv1', emoji: '🌨️', title: 'Puede caer nieve', line: 'Se espera algo de nieve en las próximas 3 horas.', action: 'Abrigate y seguí el pronóstico.', cta: '☂️' };
+function phenomenon(d) {
+  if (d.snow3 >= 0.5) return { key: 'nieve', word: 'nieve', emoji: '❄️' };
+  if (d.hailPossible) return { key: 'granizo', word: 'granizo', emoji: '🧊' };
+  if (d.storm) return { key: 'tormenta', word: 'tormenta eléctrica', emoji: '⛈️' };
+  const rain = d.votes.rain >= 2 || d.rainRate >= 0.2;
+  if (rain) {
+    if (d.rainRate >= 30) return { key: 'torrencial', word: 'lluvia torrencial', emoji: '🌊' };
+    if (d.rainRate < 2) return { key: 'llovizna', word: 'llovizna', emoji: '🌦️' };
+    return { key: 'lluvia', word: 'lluvia', emoji: '🌧️' };
   }
-  const rain = d.votes.rain >= 2, wind = d.votes.wind >= 2;
-  let what = rain ? 'lluvia' : wind ? 'ráfagas fuertes' : 'viento';
-  if (d.storm) what = 'tormenta eléctrica';
-  if (d.hailPossible) what = 'granizo y tormenta';
+  return { key: 'viento', word: 'ráfagas', emoji: '💨' };
+}
 
-  if (d.level === 0) return { cls: 'lv0', emoji: '😌', title: 'Todo tranquilo', line: 'No se espera nada raro en las próximas 3 horas.', action: 'Buen momento para estar afuera.', cta: '✅' };
-  if (d.level === 1) return { cls: 'lv1', emoji: '🌤️', title: 'Ojo con el cielo', line: 'Puede caer algo leve en las próximas 3 horas.', action: 'Si salís, llevá paraguas por las dudas.', cta: '☂️' };
-  if (d.level === 2) return {
-    cls: 'lv2', emoji: d.hailPossible ? '🧊' : d.storm ? '⛈️' : wind ? '💨' : '🌧️',
-    title: 'Se viene ' + what, line: 'Varios escenarios coinciden para las próximas 3 horas.',
-    action: 'Guardá lo que tengas afuera y cerrá las ventanas.', cta: '⚠️'
+function levelInfo(d) {
+  const ph = phenomenon(d);
+  const L = LEVELS[d.level];
+  if (d.level === 0) {
+    return {
+      cls: 'lv0', emoji: '😌', title: 'Todo tranquilo',
+      line: 'No se espera nada raro en las próximas 3 horas.',
+      action: 'Buen momento para estar afuera.', cta: '✅', pill: 'próximas 3 h'
+    };
+  }
+  const titles = {
+    1: 'Ojo: ' + ph.word,
+    2: 'Se viene ' + ph.word,
+    3: 'Alerta roja: ' + ph.word,
+    4: 'Alerta morada: ' + ph.word
+  };
+  const lines = {
+    1: 'Puede pasar algo leve en las próximas 3 horas.',
+    2: 'Varios escenarios coinciden para las próximas 3 horas.',
+    3: 'Se viene fuerte, con alta coincidencia entre escenarios.',
+    4: 'Fenómeno de intensidad excepcional previsto.'
+  };
+  const actions = {
+    1: 'Atención, pero no es grave. Seguí el pronóstico.',
+    2: 'Guardá lo que tengas afuera y cerrá las ventanas.',
+    3: 'Quedate adentro. Evitá salir en auto si no hace falta.',
+    4: 'No salgas. Es una alerta excepcional.'
   };
   return {
-    cls: 'lv3', emoji: d.hailPossible ? '🧊' : '⛈️', title: 'Peligro: ' + what,
-    line: 'Se viene fuerte, con alta coincidencia entre escenarios.',
-    action: 'Quedate adentro. Evitá salir en auto si no hace falta.', cta: '🚨'
+    cls: 'lv' + d.level, emoji: ph.emoji, title: titles[d.level],
+    line: lines[d.level], action: actions[d.level],
+    cta: L.emoji, pill: L.emoji + ' ' + L.name
   };
 }
 
@@ -224,17 +258,19 @@ function nextEvent(d) {
   for (let i = 0; i < n; i++) {
     if (d.snowHours && d.snowHours[i] >= 0.1) return { iso: d.times[i], label: 'Nieve' };
     const s = hourSignal(d, i);
-    if (s.rain || s.gust >= 50) {
-      const both = s.rain && s.gust >= 50;
-      return { iso: d.times[i], label: both ? 'Lluvia y viento' : s.rain ? 'Lluvia' : 'Viento fuerte' };
-    }
+    const g = Math.round(s.gust);
+    if (s.rain && g >= 40) return { iso: d.times[i], label: 'Lluvia y ráfagas de ' + g + ' km/h' };
+    if (s.rain) return { iso: d.times[i], label: 'Lluvia' };
+    if (g >= 60) return { iso: d.times[i], label: 'Ráfagas fuertes de ' + g + ' km/h' };
+    if (g >= 40) return { iso: d.times[i], label: 'Ráfagas moderadas de ' + g + ' km/h' };
+    if (g >= 30) return { iso: d.times[i], label: 'Ráfagas leves de ' + g + ' km/h' };
   }
   return null;
 }
 
 function eventText(d) {
   const ev = nextEvent(d);
-  if (!ev) return { txt: 'Sin lluvia ni viento fuerte en las próximas 12 horas', big: false };
+  if (!ev) return { txt: 'Sin lluvia ni ráfagas de más de 30 km/h en las próximas 12 horas', big: false };
   const mins = Math.round((new Date(ev.iso).getTime() - Date.now()) / 60000);
   if (mins <= 5) return { txt: ev.label + ' ahora mismo', big: true };
   if (mins < 60) return { txt: ev.label + ' en ' + mins + ' min', big: true };
@@ -426,12 +462,24 @@ async function refresh() {
 }
 
 function checkAlert(p, agg) {
-  const prev = S.last[p.id] ?? -1;
-  if (agg.level >= 2 && agg.level > prev) {
+  const prev = S.last[p.id];
+  const prevLevel = typeof prev === 'number' ? prev : (prev && prev.level) || -1;
+  const prevAt = (prev && typeof prev === 'object' && prev.at) || 0;
+  const now = Date.now();
+
+  /* avisa desde amarilla (nivel 1), sin repetir el mismo nivel antes de 3 h */
+  if (agg.level >= 1 && agg.level > prevLevel && now - prevAt > 3 * 60 * 60 * 1000) {
+    const L = LEVELS[agg.level];
+    const ph = phenomenon(agg);
     const info = levelInfo(agg);
-    notify(info.cta + ' ' + info.title + ' — ' + p.name, info.action);
+    notify(
+      `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${p.name}`,
+      info.action
+    );
+    S.last[p.id] = { level: agg.level, at: now };
+  } else {
+    S.last[p.id] = { level: agg.level, at: agg.level >= 1 ? prevAt : 0 };
   }
-  S.last[p.id] = agg.level;
 }
 
 function notify(title, body) {
@@ -510,12 +558,13 @@ function paint() {
     return;
   }
   const worst = Math.max(...S.places.map(levelOf));
-  const alerts = S.places.filter(p => levelOf(p) >= 2).length;
-  const msg = worst >= 3 ? (alerts > 1 ? alerts + ' lugares en peligro' : 'Peligro en un lugar')
-    : worst === 2 ? (alerts > 1 ? alerts + ' lugares en alerta' : 'Un lugar en alerta')
-      : worst === 1 ? 'Ojo con el cielo'
-        : worst === 0 ? 'Todo tranquilo'
-          : 'Actualizando…';
+  const alerts = S.places.filter(p => levelOf(p) >= 1).length;
+  const msg = worst >= 4 ? (alerts > 1 ? alerts + ' lugares en alerta morada' : 'Alerta morada en un lugar')
+    : worst === 3 ? (alerts > 1 ? alerts + ' lugares en alerta roja' : 'Alerta roja en un lugar')
+      : worst === 2 ? (alerts > 1 ? alerts + ' lugares en alerta naranja' : 'Alerta naranja en un lugar')
+        : worst === 1 ? (alerts > 1 ? alerts + ' lugares en alerta amarilla' : 'Alerta amarilla en un lugar')
+          : worst === 0 ? 'Todo tranquilo'
+            : 'Actualizando…';
   sub.textContent = msg + (S.busy ? ' · actualizando' : ' · ' + ago(S.updated));
 
   if (S.view === 'settings') view.innerHTML = viewSettings();
@@ -590,9 +639,11 @@ function heroHtml(p) {
   const info = levelInfo(d);
   const ev = eventText(d);
   const c = d.current || {};
+  const gNow = c.wind_gusts_10m != null ? Math.round(c.wind_gusts_10m) : null;
   const nowBits = [
     c.temperature_2m != null ? Math.round(c.temperature_2m) + '°' : '',
     skyText(c.weather_code),
+    gNow != null && gNow >= 20 ? 'ráfagas ' + gNow + ' km/h' : '',
     (c.precipitation || 0) > 0 ? 'está lloviendo' : ''
   ].filter(Boolean).join(' · ');
 
@@ -602,7 +653,7 @@ function heroHtml(p) {
     : '';
 
   return `<section class="hero ${info.cls}">
-    <div class="where"><span>📍 <b>${esc(p.name)}</b></span><span class="chip3h">próximas 3 h</span></div>
+    <div class="where"><span>📍 <b>${esc(p.name)}</b></span><span class="chip3h">${esc(info.pill)}</span></div>
 
     <div class="main">
       <div class="emoji">${info.emoji}</div>
@@ -691,6 +742,8 @@ function probHtml(d) {
   ];
   if (d.hailPossible) bits.push('<b>posible granizo</b>');
   if (d.snow3 >= 0.2) bits.push('nieve <b>' + d.snow3.toFixed(1) + ' cm</b>');
+  const g12 = Math.round(maxGust(d, 12));
+  if (g12 >= 25) bits.push('ráfagas hasta <b>' + g12 + ' km/h</b>');
   return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}</div>`;
 }
 
@@ -753,7 +806,9 @@ function viewSettings() {
   const tot = {};
   done.forEach(f => Object.keys(f.pred).forEach(m => {
     const pr = f.pred[m];
-    const hit = f.a === 'no' ? (!pr.rain && !pr.wind && !pr.hail) : !!pr[f.a] || (f.a === 'rain' && pr.hail) || (f.a === 'hail' && pr.rain);
+    const hit = f.a === 'no' ? (!pr.rain && !pr.wind && !pr.hail && !pr.gust)
+      : f.a === 'gust' ? !!pr.gust
+        : !!pr[f.a] || (f.a === 'rain' && pr.hail) || (f.a === 'hail' && pr.rain);
     tot[m] = tot[m] || [0, 0];
     tot[m][1]++; if (hit) tot[m][0]++;
   }));
@@ -784,6 +839,17 @@ function viewSettings() {
   <div class="sec">Qué modelo acierta más acá</div>
   <div class="card">
     ${scoreRows || `<p>Cuando respondas “¿Está pasando?”, acá vas a ver qué modelo le pega más en tu zona.</p>`}
+  </div>
+
+  <div class="sec">Escala de alertas</div>
+  <div class="card list">
+    ${LEVELS.map((L, i) => `<div class="row"><div class="grow"><b>${L.emoji} ${L.name}</b><small>${[
+      'Sin fenómenos previstos.',
+      'Puede pasar algo, no es grave.',
+      'Conviene prepararse y guardar cosas.',
+      'Quedate adentro.',
+      'Excepcional: no salir.'
+    ][i]}</small></div></div>`).join('')}
   </div>
 
   <div class="sec">ASN 4.0</div>
@@ -914,10 +980,126 @@ function useGPS() {
   );
 }
 
+/* ===================== Pregunta en pantalla + radar ===================== */
+const ASK_KEY = 'asn.askedAt';
+
+function askCandidate() {
+  const withData = S.places.filter(p => S.data[p.id] && !S.data[p.id].error);
+  if (!withData.length) return null;
+  return withData.sort((a, b) => levelOf(b) - levelOf(a))[0];
+}
+
+function openAsk() {
+  const p = askCandidate();
+  if (!p) return false;
+  S.askPlace = p.id;
+  const el = document.getElementById('askSheet');
+  if (!el) return false;
+  document.getElementById('askPlace').textContent = '📍 ' + p.name;
+  const res = document.getElementById('askResult');
+  if (res) { res.hidden = true; res.innerHTML = ''; }
+  el.hidden = false;
+  return true;
+}
+
+function closeAsk(mark) {
+  const el = document.getElementById('askSheet');
+  if (el) el.hidden = true;
+  if (mark) { try { localStorage.setItem(ASK_KEY, String(Date.now())); } catch (e) { } }
+}
+
+function maybeOpenAsk() {
+  let last = 0;
+  try { last = Number(localStorage.getItem(ASK_KEY) || 0); } catch (e) { }
+  if (Date.now() - last < 6 * 60 * 60 * 1000) return;
+  const tutorial = document.getElementById('sheet');
+  if (tutorial && !tutorial.hidden) { setTimeout(maybeOpenAsk, 90000); return; }
+  if (!openAsk()) setTimeout(() => openAsk(), 8000);
+}
+
+/* Cruza el reporte del usuario con el radar de RainViewer (tiles con CORS) */
+async function radarCheck(p) {
+  try {
+    const meta = await fetch('https://api.rainviewer.com/public/weather-maps.json', { cache: 'no-store' }).then(r => r.json());
+    const past = meta && meta.radar && meta.radar.past;
+    if (!past || !past.length) return 'unknown';
+    const frame = past[past.length - 1];
+    const z = 8, n = Math.pow(2, z);
+    const latRad = p.lat * Math.PI / 180;
+    const fx = (p.lon + 180) / 360 * n;
+    const fy = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+    const x = Math.floor(fx), y = Math.floor(fy);
+    const url = meta.host + frame.path + '/256/' + z + '/' + x + '/' + y + '/2/1_1.png';
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    const cv = document.createElement('canvas');
+    cv.width = 256; cv.height = 256;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const px = Math.round((fx - x) * 256), py = Math.round((fy - y) * 256);
+    const x0 = Math.max(0, px - 5), y0 = Math.max(0, py - 5);
+    const w = Math.min(11, 256 - x0), h = Math.min(11, 256 - y0);
+    const data = ctx.getImageData(x0, y0, w, h).data;
+    let hits = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 40) hits++;
+    return hits > 3 ? 'rain' : 'clear';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
+function radarText(a, r) {
+  if (r === 'unknown') return 'No pudimos revisar el radar en este momento.';
+  if (r === 'rain') {
+    return a === 'no'
+      ? 'El radar <b>sí ve lluvia cerca</b>: puede ser un chaparrón puntual o estar pasando a unos kilómetros.'
+      : 'El radar <b>también ve lluvia cerca</b> de tu zona.';
+  }
+  return a === 'rain'
+    ? 'El radar <b>no ve lluvia</b> justo ahora: puede ser lluvia muy local o poca cobertura del radar.'
+    : 'El radar <b>no ve lluvia</b> en tu zona en este momento.';
+}
+
+function recordFeedback(p, a) {
+  const d = S.data[p.id];
+  if (!d) return;
+  const pred = {};
+  d.models.forEach(m => {
+    pred[m.m] = {
+      rain: m.rain, wind: m.wind, hail: false,
+      gust: m.hours.slice(0, 3).some(h => h.gust >= 40)
+    };
+  });
+  S.feedback.push({ p: p.name, t: Date.now(), a, pred, level: d.level, radar: null });
+  S.feedback = S.feedback.slice(-200);
+  save();
+}
+
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-close],[data-wind],[data-phen],[data-dismiss],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#copyTopic,#reopenIntro,#startBtn,#installBtn');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#copyTopic,#reopenIntro,#startBtn,#installBtn');
   if (!t) return;
+
+  if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
+  if (t.hasAttribute('data-askans')) {
+    const a = t.getAttribute('data-askans');
+    const p = S.places.find(x => x.id === S.askPlace);
+    const res = document.getElementById('askResult');
+    if (p) recordFeedback(p, a);
+    if (res) { res.hidden = false; res.innerHTML = 'Revisando el radar de tu zona…'; }
+    if (p) {
+      radarCheck(p).then(r => {
+        if (res) res.innerHTML = radarText(a, r) + '<br><span style="color:#7d90b3;font-size:12px">Cruzamos tu reporte con el radar y los modelos.</span>';
+        const fb = S.feedback[S.feedback.length - 1];
+        if (fb && !fb.radar) { fb.radar = r; save(); }
+        setTimeout(() => closeAsk(true), 4500);
+      });
+    } else {
+      closeAsk(true);
+    }
+    return;
+  }
 
   if (t.hasAttribute('data-dismiss')) {
     const kind = t.getAttribute('data-dismiss');
@@ -981,14 +1163,7 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-ans')) {
     const id = t.getAttribute('data-place');
     const p = S.places.find(x => x.id === id);
-    const d = S.data[id];
-    if (p && d) {
-      const pred = {};
-      d.models.forEach(m => { pred[m.m] = { rain: m.rain, wind: m.wind, hail: false }; });
-      S.feedback.push({ p: p.name, t: Date.now(), a: t.getAttribute('data-ans'), pred });
-      S.feedback = S.feedback.slice(-200);
-      save();
-    }
+    if (p) recordFeedback(p, t.getAttribute('data-ans'));
     S.askFor = null;
     paint();
     toast('Anotado. Gracias');
@@ -1044,6 +1219,9 @@ function init() {
   let seen = false;
   try { seen = !!localStorage.getItem(INTRO_KEY); } catch (e) { }
   if (!seen) setTimeout(openSheet, 2500);
+
+  /* a los 20 s pregunta qué está pasando (máximo cada 6 h) */
+  setTimeout(() => maybeOpenAsk(), 20000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

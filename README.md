@@ -24,13 +24,19 @@ Límite real: si una altura no está cargada en OpenStreetMap, no existe en ning
 
 **Probability of exceedance sobre ensemble**, no un voto entre modelos. El ensemble del IFS tiene 51 escenarios; la app cuenta cuántos superan cada umbral en las próximas 3 horas:
 
-| Fenómeno | Nivel 1 | Nivel 2 | Nivel 3 |
-|---|---|---|---|
-| Lluvia en 3 h | P(≥15 mm) ≥ 30 % | P(≥30 mm) ≥ 40 % | P(≥60 mm) ≥ 50 % |
-| Ráfagas | P(≥60 km/h) ≥ 40 % | P(≥80 km/h) ≥ 40 % | P(≥100 km/h) ≥ 30 % |
-| Tormenta eléctrica | CAPE ≥ 1000 J/kg **y** P(lluvia ≥ 10 mm) ≥ 30 % | — | — |
-| Granizo | etiqueta "posible granizo" (CAPE ≥ 1500, ráfaga ≥ 70 km/h, nivel de congelamiento 3000–4500 m) | | |
-| Nieve (cm en 3 h) | ≥ 0,2 cm | ≥ 2 cm | ≥ 5 cm |
+| Fenómeno | 🟡 Amarilla | 🟠 Naranja | 🔴 Roja | 🟣 Morada |
+|---|---|---|---|---|
+| Lluvia en 3 h | P(≥15 mm) ≥ 30 % | P(≥30 mm) ≥ 40 % | P(≥60 mm) ≥ 50 % | P(≥100 mm) ≥ 30 % |
+| Ráfagas | P(≥60 km/h) ≥ 40 % | P(≥80 km/h) ≥ 40 % | P(≥100 km/h) ≥ 30 % | P(≥130 km/h) ≥ 30 % |
+| Tormenta eléctrica | CAPE ≥ 1000 J/kg **y** P(lluvia ≥ 10 mm) ≥ 30 % | — | — | — |
+| Granizo | etiqueta "posible granizo" (CAPE ≥ 1500, ráfaga ≥ 70 km/h, congelamiento 3000–4500 m) | | | |
+| Nieve (cm en 3 h) | ≥ 0,2 cm | ≥ 2 cm | ≥ 5 cm | ≥ 15 cm |
+
+### Escala de colores
+
+Verde, amarilla, naranja y roja son los cuatro niveles de la vigilancia de **Météo-France**; el **morado** es el nivel excepcional que ese sistema agrega para fenómenos extremos (en ciclones se activa cuando incluso los servicios de rescate deben confinarse). En ASN 4.0 el morado se reserva para umbrales que en Córdoba se ven muy rara vez: ≥100 mm en 3 h o ráfagas ≥130 km/h.
+
+Los umbrales numéricos son una decisión operativa nuestra, documentada acá, no una tabla oficial: el color describe gravedad esperada, no una probabilidad exacta.
 
 **La nieve no es un ejemplo:** se calcula con las variables `snowfall` (cm) y `snow_depth` (m) de Open-Meteo, alimentadas por el IFS. En Córdoba es poco frecuente pero real: la última nevada en la capital fue el 16 de junio de 2021 y, según registros históricos recogidos por La Voz, las nevadas en la ciudad sólo habían ocurrido en julio, agosto y septiembre ([La Voz, 28/06/2025](https://www.lavoz.com.ar/ciudadanos/la-ola-polar-trajo-frio-extremo-y-altas-chances-de-nieve-incluso-en-la-ciudad-de-cordoba_0_oZC8NgiZ77.html)).
 
@@ -40,7 +46,8 @@ Además se calculan los cuatro modelos determinísticos (ECMWF, GFS, ICON, GEM) 
 
 ## Avisos
 
-- **App abierta o en segundo plano:** notificación del navegador al pasar a naranja o rojo.
+- **App abierta o en segundo plano:** notificación del navegador **desde amarilla en adelante**, con el color y el fenómeno en el título: `🟡 Alerta amarilla · 💨 ráfagas en Casa`, `🔴 Alerta roja · 🧊 granizo en Colegio`, `🟠 Alerta naranja · 🌊 lluvia torrencial en Casa`. El mismo nivel no se repite antes de 3 h.
+- **Pregunta en pantalla:** a los 20 segundos de abrir, la app pregunta “¿Qué estás viendo en tu zona?” (máximo cada 6 h). Con esa respuesta cruza el reporte con el radar de RainViewer en vivo y guarda el resultado para la estadística de acierto por modelo.
 - **App cerrada:** GitHub Actions cada 10 minutos con el mismo criterio de ensemble, publicando en **ntfy.sh**. Instalá ntfy y suscribite al canal que muestra ⚙️ Ajustes.
 - **Reglas de emisión:** mismo nivel no se repite antes de 3 h; el nivel baja sólo tras dos corridas por debajo; de 23 a 7 sólo pasa el nivel 3.
 

@@ -75,6 +75,7 @@ a{color:#93c5fd;text-decoration:none}
 .hero.lv1{--glow:#fbbf24;background:linear-gradient(165deg,#2a2411,#101a2b)}
 .hero.lv2{--glow:#fb923c;background:linear-gradient(165deg,#301d0e,#121a2b);border-color:rgba(251,146,60,.28)}
 .hero.lv3{--glow:#f87171;background:linear-gradient(165deg,#33111a,#17101f);border-color:rgba(248,113,113,.38)}
+.hero.lv4{--glow:#c084fc;background:linear-gradient(165deg,#2a1238,#170f26);border-color:rgba(192,132,252,.42)}
 .hero .where{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
 .hero .where b{color:#e8f0ff;font-weight:650;letter-spacing:.1px}
 .hero .chip3h{background:rgba(255,255,255,.06);padding:3px 9px;border-radius:999px;font-size:11px}
@@ -84,7 +85,7 @@ a{color:#93c5fd;text-decoration:none}
 @keyframes breathe{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-3px) scale(1.05)}}
 .hero .title{font-size:27px;font-weight:850;letter-spacing:-.7px;line-height:1.1}
 .hero.lv0 .title{color:#a7f3d0}.hero.lv1 .title{color:#fde68a}
-.hero.lv2 .title{color:#fdba74}.hero.lv3 .title{color:#fca5a5}
+.hero.lv2 .title{color:#fdba74}.hero.lv3 .title{color:#fca5a5}.hero.lv4 .title{color:#e9d5ff}
 .hero .line{font-size:14px;color:#c6d4ec;margin-top:7px;max-width:34ch}
 .hero .action{
   display:flex;gap:10px;align-items:flex-start;margin-top:13px;padding:12px 14px;border-radius:15px;
@@ -219,6 +220,12 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 .phen button.on{background:#23406b;border-color:#3b6ba8;color:#fff}
 .demoPrev{margin-top:14px}
 .sheet .go{width:100%;margin-top:18px;padding:14px;font-size:15px}
+.askgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+.askgrid button{background:#16243a;border:1px solid var(--line2);color:#e6efff;padding:15px 12px;font-size:14.5px;font-weight:600;border-radius:15px;text-align:left}
+.askgrid button:nth-child(5){grid-column:1/-1}
+.askgrid button:active{background:#1f3350}
+.askres{margin-top:14px;padding:13px;border-radius:15px;background:#12203a;border:1px solid var(--line);font-size:13.5px;color:#c7d5ee;line-height:1.55}
+.askres b{color:#fff}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -277,6 +284,24 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
     </div>
 
     <button class="go" id="startBtn">Empezar</button>
+  </section>
+</div>
+
+<div class="sheet-wrap" id="askSheet" hidden>
+  <div class="sheet-backdrop" data-closeask></div>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="askTitle">
+    <button class="x" data-closeask aria-label="Cerrar">✕</button>
+    <h2 id="askTitle">¿Qué estás viendo en tu zona?</h2>
+    <p class="lead" id="askPlace">—</p>
+    <div class="askgrid">
+      <button data-askans="rain">🌧️ Llueve</button>
+      <button data-askans="no">🙂 Nada</button>
+      <button data-askans="hail">🧊 Cae piedra</button>
+      <button data-askans="gust">💨 Ráfagas</button>
+      <button data-askans="wind">🌬️ Viento fuerte</button>
+    </div>
+    <div class="askres" id="askResult" hidden></div>
+    <button class="ghost" data-closeask style="width:100%;margin-top:14px">Ahora no</button>
   </section>
 </div>
 
