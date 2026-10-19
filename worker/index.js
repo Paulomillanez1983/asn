@@ -16,6 +16,14 @@ export default {
         return new Response('No pudimos generar la vista previa.', { status: 500 });
       }
     }
+    if (url.pathname === '/apoyar' || url.pathname === '/apoyar.html') {
+      const assetUrl = new URL('/apoyar.html', url.origin);
+      const r = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+      const h = new Headers(r.headers);
+      h.set('cache-control', 'no-store');
+      return new Response(r.body, { status: r.status, headers: h });
+    }
+
     if (url.pathname === '/og.png' || url.pathname.startsWith('/og/')) {
       const res = await env.ASSETS.fetch(request);
       if (!res.ok) return res;
