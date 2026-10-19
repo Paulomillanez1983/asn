@@ -371,6 +371,24 @@ function phenomenon(d) {
 }
 
 function levelInfo(d) {
+  if (d.hydro && d.hydro.level >= 1) {
+    const h = d.hydro;
+    const lv = Math.max(1, Math.min(4, h.level));
+    const pills = { 1: '🌊 Río alto', 2: '🌊 Alerta', 3: '🌊 Evacuación', 4: '🌊 Crecida grave' };
+    /* con el río en alerta, el clima queda en segundo plano */
+    const tail = lv <= 2 ? ' El clima, por ahora, tranquilo.' : '';
+    return {
+      cls: 'flood' + lv,
+      emoji: '🌊',
+      title: h.headline || (lv >= 3 ? 'Crecida grave' : lv === 2 ? 'Alerta por crecida' : 'Río alto'),
+      line: (h.plain || 'El río está alto.') + tail,
+      detail: h.detail || '',
+      action: h.advice || 'Seguí el aviso si estás cerca de la costa.',
+      cta: lv >= 3 ? '🚨' : '🌊',
+      pill: pills[lv]
+    };
+  }
+
   const ph = phenomenon(d);
   const L = LEVELS[d.level];
   if (d.level === 0) {
@@ -833,12 +851,22 @@ function paint() {
   }
   const worst = Math.max(...S.places.map(levelOf));
   const alerts = S.places.filter(p => levelOf(p) >= 1).length;
-  const msg = worst >= 4 ? (alerts > 1 ? alerts + ' lugares en alerta morada' : 'Alerta morada en un lugar')
+  const hydroWorst = Math.max(0, ...S.places.map(p =>
+    (S.data[p.id] && S.data[p.id].hydro && S.data[p.id].hydro.level) || 0));
+
+  let msg = worst >= 4 ? (alerts > 1 ? alerts + ' lugares en alerta morada' : 'Alerta morada en un lugar')
     : worst === 3 ? (alerts > 1 ? alerts + ' lugares en alerta roja' : 'Alerta roja en un lugar')
       : worst === 2 ? (alerts > 1 ? alerts + ' lugares en alerta naranja' : 'Alerta naranja en un lugar')
         : worst === 1 ? (alerts > 1 ? alerts + ' lugares en alerta amarilla' : 'Alerta amarilla en un lugar')
           : worst === 0 ? 'Todo tranquilo'
             : 'Actualizando…';
+
+  if (hydroWorst >= 1 && hydroWorst >= worst) {
+    msg = hydroWorst >= 4 ? 'Crecida grave en un lugar'
+      : hydroWorst === 3 ? 'Evacuación por crecida en un lugar'
+        : hydroWorst === 2 ? 'Alerta por crecida en un lugar'
+          : 'Río alto en un lugar';
+  }
   sub.textContent = msg + (S.busy ? ' · actualizando' : ' · ' + ago(S.updated));
 
   if (S.view === 'settings') view.innerHTML = viewSettings();
@@ -864,7 +892,9 @@ function viewEmpty() {
 }
 
 function viewHome() {
+  const rank = p => Math.max(levelOf(p), (S.data[p.id] && S.data[p.id].hydro && S.data[p.id].hydro.level) || 0);
   const ordered = [...S.places].sort((a, b) =>
+    (rank(b) - rank(a)) ||
     (levelOf(b) - levelOf(a)) || String(a.label || '').localeCompare(String(b.label || '')));
   const loading = S.busy && !Object.keys(S.data).length;
   let body;
@@ -877,8 +907,16 @@ function viewHome() {
         : '');
   }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
-  return hydroBanner() + travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
-    `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
+  const foot = `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
+
+  const top = hydroBanner() + travelBanner();
+  const promo = installBanner() + notifyBanner() + hydroAskBanner();
+
+  /* si hay alerta, la tarjeta va primero: lo demás puede esperar */
+  const alerting = ordered.some(p => rank(p) >= 2);
+  return alerting
+    ? top + body + promo + add + foot
+    : top + promo + body + add + foot;
 }
 
 function bindRail() {
@@ -939,7 +977,8 @@ function heroHtml(p) {
   }
   const info = levelInfo(d);
   const hyLvl = (d.hydro && d.hydro.level) || 0;
-  const pill = hyLvl >= 2 ? '🌊 Crecida' : hyLvl === 1 ? '🌊 Río alto' : info.pill;
+  const effLvl = Math.max(d.level, hyLvl);   // la crecida también es una alerta
+  const pill = info.pill;
   const ev = eventText(d);
   const k = kindOf(p);
   const c = d.current || {};
@@ -956,13 +995,13 @@ function heroHtml(p) {
     ? `<button class="ghost" data-ask="${p.id}" style="padding:7px 10px;font-size:12px">¿Está pasando?</button>`
     : '';
 
-  return `<section class="hero ${info.cls}${d.level >= 1 ? ' alert' : ''}">
+  return `<section class="hero ${info.cls}${effLvl >= 1 ? ' alert' : ''}">
     <div class="where">
       <span>${k.emoji} <b>${esc(p.label)}</b></span>
       <span style="display:flex;align-items:center;gap:7px">
         <span class="chip3h${hyLvl >= 1 ? ' hydro' : ''}">${esc(pill)}</span>
-        ${d.level >= 2 ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
-        ${d.level >= 1 ? `<button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>` : ''}
+        ${effLvl >= 2 && !hyLvl ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
+        ${effLvl >= 1 ? `<button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>` : ''}
       </span>
     </div>
     ${p.addr ? `<div class="addr">${esc(p.addr)}</div>` : ''}
@@ -972,18 +1011,19 @@ function heroHtml(p) {
       <div>
         <div class="title">${info.title}</div>
         <div class="line">${info.line}</div>
+        ${info.detail ? `<div class="hdetail">${esc(info.detail)}</div>` : ''}
       </div>
     </div>
 
     <div class="action"><span class="cta">${info.cta}</span><span>${info.action}</span></div>
 
-    ${ev.txt && !/^Ráfagas/.test(ev.txt) ? `<div class="event ${ev.big ? 'big' : ''}">⏱ ${ev.txt}</div>` : ''}
+    ${hyLvl < 3 && ev.txt && !/^Ráfagas/.test(ev.txt) ? `<div class="event ${ev.big ? 'big' : ''}">⏱ ${ev.txt}</div>` : ''}
 
-    ${windHtml(d)}
+    ${hyLvl >= 3 ? '' : windHtml(d)}
 
     ${timelineHtml(d)}
 
-    ${tilesHtml(d)}
+    ${hyLvl >= 3 ? '' : tilesHtml(d)}
 
     <div class="now">
       <span>Ahora <b>${nowBits || '—'}</b></span>
@@ -1083,9 +1123,15 @@ function hydroHtml(d, p) {
       riverName = nearby[0].name + ' (' + nearby[0].d + ' km)';
     }
     if (!riverName) riverName = 'Río cercano';
-    const state = h.level === 0 ? 'nivel habitual' : h.level === 1 ? 'alto' : 'crecida';
+    const state = ['nivel habitual', 'alto', 'alerta', 'evacuación', 'crecida grave'][Math.min(4, h.level)] || 'alto';
+    const bits = [];
+    if (h.now != null) bits.push('nivel medido ' + String(h.now).replace('.', ',') + ' m');
+    if (h.al != null) bits.push('alerta ' + String(h.al).replace('.', ',') + ' m');
+    if (h.ev != null) bits.push('evacuación ' + String(h.ev).replace('.', ',') + ' m');
+    if (h.station && h.station.name) bits.push('estación ' + h.station.name);
+    const meta = bits.length ? ' · ' + bits.join(' · ') : '';
     const rainTxt = h.rain48 >= 1 ? ` · lluvia de las últimas 48 h: ${h.rain48} mm` : '';
-    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · ${esc(h.plain || state)}${rainTxt}</div>`);
+    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · ${esc(state)}${esc(meta)}${rainTxt}</div>`);
   }
   const rivers = (p && S.rivers && S.rivers[p.id]) || [];
   if (rivers.length) {
@@ -1194,17 +1240,30 @@ function travelBanner() {
 }
 
 function hydroBanner() {
-  const p = S.places.find(x => S.data[x.id] && S.data[x.id].hydro && S.data[x.id].hydro.level >= 1);
+  /* el lugar con la situación de agua más grave */
+  const cands = S.places
+    .filter(x => S.data[x.id] && S.data[x.id].hydro && S.data[x.id].hydro.level >= 1)
+    .sort((a, b) => S.data[b.id].hydro.level - S.data[a.id].hydro.level);
+  const p = cands[0];
   if (!p) return '';
+
   const h = S.data[p.id].hydro;
-  const title = (h.level >= 2 ? 'El río está creciendo' : 'El río está alto') + ' cerca de ' + p.label;
-  return `<div class="banner warn">
-    <div class="bi">🌊</div>
-    <div class="bt"><b>${esc(title)}</b><span>${esc(h.river || '')} · ${esc(h.plain || '')}</span></div>
+  const lv = Math.max(1, Math.min(4, h.level));
+  const tone = lv >= 4 ? 'floodb4' : lv === 3 ? 'floodb3' : lv === 2 ? 'floodb2' : 'floodb1';
+  const title = (h.headline || 'Crecida cerca') + ' · ' + p.label;
+  /* en el banner va lo justo: dónde y cuánto. El resto está en la tarjeta. */
+  const first = String(h.detail || '').split('. ')[0];
+  const sub = [h.river, first].filter(Boolean).join(' · ');
+
+  return `<div class="banner ${tone}">
+    <div class="bi">${lv >= 3 ? '🚨' : '🌊'}</div>
+    <div class="bt"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
   </div>`;
 }
 
 function hydroAskBanner() {
+  /* si ya hay una crecida en curso, no preguntamos: mostramos el aviso */
+  if (hydroBanner()) return '';
   const p = S.places.find(x => x.hydro === undefined);
   if (!p) return '';
   return `<div class="banner">
@@ -1523,25 +1582,26 @@ function b64url(obj) {
 async function sharePlace(id) {
   const p = S.places.find(x => x.id === id);
   if (!p) return;
-  if (!S.data[id] || S.data[id].level < 1) {
+  const d0 = S.data[p.id];
+  const hyLvl = (d0 && d0.hydro && d0.hydro.level) || 0;
+  const lvl = Math.max((d0 && d0.level) || 0, hyLvl);
+
+  if (!d0 || lvl < 1) {
     toast('El enlace se comparte desde alerta amarilla');
     return;
   }
-  const d0 = S.data[p.id];
+
+  const ph = hyLvl >= 1
+    ? { word: d0.hydro.headline || 'crecida', emoji: '🌊' }
+    : phenomenon(d0);
+
   const token = b64url({
     n: p.label, a: p.addr, lat: p.lat, lon: p.lon,
-    l: d0 ? d0.level : 0,
-    p: d0 ? phenomenon(d0).word : '',
-    e: d0 ? phenomenon(d0).emoji : ''
+    l: lvl, p: ph.word, e: ph.emoji
   });
-  const stamp = (d0 ? d0.level : 0) + 'h' + Math.floor(Date.now() / 3600000);
+  const stamp = lvl + 'h' + Math.floor(Date.now() / 3600000);
   const url = location.origin + '/alerta/' + token + '?s=' + stamp;
-  const d = S.data[id];
-  const text = d
-    ? (d.level === 0
-      ? `Sin alerta en ${p.label}`
-      : `${LEVELS[d.level].name} · ${phenomenon(d).word} en ${p.label}`)
-    : `ASN 4.0 · ${p.label}`;
+  const text = `${LEVELS[lvl].name} · ${ph.word} en ${p.label}`;
   try {
     if (navigator.share) {
       await navigator.share({ title: 'ASN 4.0', text, url });

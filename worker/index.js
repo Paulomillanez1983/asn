@@ -161,16 +161,23 @@ async function api(req, env, url) {
     let text = 'Prueba de aviso en tiempo real. Si lo ves, funciona.';
 
     if (body.kind === 'hydro') {
-      title = '🌊 El río está creciendo · Paraná (0.3 km)';
-      text = 'El río está más alto que casi todos los días de los últimos 3 meses. ' +
-        'Si estás cerca de la costa o en zona baja, evitá el lugar y seguí el aviso. ' +
-        'Cerca de ' + place + '. (Prueba)';
+      let h = null;
+      try {
+        const p0 = rec.places && rec.places[0];
+        if (p0) h = await hydroFor(env, p0.lat, p0.lon);
+      } catch (e) { }
+      const L = LEVELS[(h && h.level) || 2];
+      title = `${L.emoji} ${L.name} · 🌊 ${(h && h.headline) || 'Crecida cerca'}` +
+        ((h && h.river) ? ' · ' + h.river : '');
+      text = ((h && h.plain) || 'El agua está más alta de lo normal.') + ' ' +
+        ((h && h.detail) || '') + ' ' + ((h && h.advice) || '') + ' (Prueba)';
     } else if (body.kind === 'rain') {
       title = '🟠 Alerta naranja · 🌧️ lluvia en ' + place;
       text = 'Se viene lluvia fuerte en las próximas 3 horas. Guardá lo que tengas afuera y cerrá las ventanas. (Prueba)';
     }
 
-    const r = await sendPush(env, rec.sub, title, text, 'test');
+    const kindOut = body.kind === 'hydro' ? 'flood' : body.kind === 'rain' ? 'rain' : 'alert';
+    const r = await sendPush(env, rec.sub, title, text, 'test', kindOut, body.kind ? 2 : 0);
     return json({ result: r });
   }
 
@@ -414,8 +421,185 @@ async function riversNear(env, lat, lon) {
   return list;
 }
 
+/* --- lectura del nivel MEDIDO en la estación (Prefectura / INA) --- */
+const INA_A5 = 'https://alerta.ina.gob.ar/a5/obs/puntual';
+const HIST_FROM = '1990-01-01';
+
+/* datos fijos de la estación: serie, umbrales y percentiles propios */
+async function inaSeries(env, st) {
+  const key = `ina:ser:v3:${st.id}`;
+  const hit = await env.SUBS.get(key, 'json');
+  if (hit) return hit;
+
+  let out = null;
+  try {
+    const r = await fetch(`${INA_A5}/series?format=json&estacion_id=${st.id}`,
+      { headers: { accept: 'application/json' } });
+    if (r.ok) {
+      const rows = await r.json();
+      const list = (rows && rows.rows) || (Array.isArray(rows) ? rows : []);
+      const row = list.find(x => x && x.var && x.var.var === 'H' && x.estacion);
+      if (row) {
+        const e = row.estacion || {};
+        out = {
+          seriesId: row.id,
+          name: e.nombre || st.n,
+          al: e.nivel_alerta != null ? Number(e.nivel_alerta) : st.al,
+          ev: e.nivel_evacuacion != null ? Number(e.nivel_evacuacion) : st.ev,
+          ab: e.nivel_aguas_bajas != null ? Number(e.nivel_aguas_bajas) : null
+        };
+      }
+    }
+  } catch (e) { }
+  if (!out || out.seriesId == null) return null;
+
+  /* percentiles propios: cómo se compara este nivel con SU historia */
+  try {
+    const u = `${INA_A5}/observaciones?format=json&series_id=${out.seriesId}` +
+      `&timestart=${HIST_FROM}&timeend=${new Date().toISOString().slice(0, 10)}`;
+    const r2 = await fetch(u, { headers: { accept: 'application/json' } });
+    if (r2.ok) {
+      const obs = await r2.json();
+      const rows = (Array.isArray(obs) ? obs : [])
+        .map(o => ({ d: String(o.timestart).slice(0, 10), v: Number(o.valor) }))
+        .filter(x => isFinite(x.v))
+        .sort((a, b) => a.d.localeCompare(b.d));
+      const vals = rows.map(x => x.v);
+      if (vals.length > 500) {
+        const r2d = v => Math.round(v * 100) / 100;
+        out.p90 = r2d(percentile(vals, 0.90));
+        out.p95 = r2d(percentile(vals, 0.95));
+        out.p99 = r2d(percentile(vals, 0.99));
+        out.max = r2d(Math.max(...vals));
+        out.histN = vals.length;
+        /* días altos (>= p95) para poder decir "no se veía desde…" */
+        out.above = rows.filter(x => x.v >= out.p95).map(x => [x.d, r2d(x.v)]);
+      }
+    }
+  } catch (e) { }
+
+  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
+  return out;
+}
+
+/* nivel de hoy + tendencia de los últimos días */
+async function inaNow(env, seriesId) {
+  const key = `ina:now:v2:${seriesId}`;
+  const hit = await env.SUBS.get(key, 'json');
+  if (hit && Date.now() - hit.at < 45 * 60 * 1000) return hit;
+
+  const end = new Date();
+  const start = new Date(end.getTime() - 40 * 86400000);
+  const u = `${INA_A5}/observaciones?format=json&series_id=${seriesId}` +
+    `&timestart=${start.toISOString().slice(0, 10)}&timeend=${end.toISOString().slice(0, 10)}`;
+
+  let rows = null;
+  try {
+    const r = await fetch(u, { headers: { accept: 'application/json' } });
+    if (r.ok) {
+      const arr = await r.json();
+      rows = (Array.isArray(arr) ? arr : [])
+        .map(o => ({ d: o.timestart, v: Number(o.valor) }))
+        .filter(x => isFinite(x.v))
+        .sort((a, b) => new Date(a.d) - new Date(b.d));
+    }
+  } catch (e) { }
+  if (!rows || !rows.length) return null;
+
+  const last = rows[rows.length - 1];
+  const back = n => rows[Math.max(0, rows.length - 1 - n)].v;
+  const d3 = rows.length > 3 ? last.v - back(3) : 0;
+  const d7 = rows.length > 7 ? last.v - back(7) : 0;
+  const rd = v => Math.round(v * 100) / 100;
+
+  const out = {
+    at: Date.now(), now: rd(last.v), date: last.d,
+    d3: rd(d3), d7: rd(d7),
+    slope: rows.length > 3 ? Math.round((d3 / 3) * 1000) / 1000 : 0,
+    n: rows.length
+  };
+  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
+  return out;
+}
+
+/* 0..4 según qué tan alto está el agua frente a los umbrales de ESA estación */
+function hydroLevel(r, s) {
+  if (r == null || !s) return 0;
+  if (s.ev != null) {
+    if (r >= s.ev + 0.5) return 4;
+    if (r >= s.ev) return 3;
+    if (s.al != null && r >= s.al) return 2;
+    if (s.al != null && r >= s.al - 0.8) return 1;
+    return 0;
+  }
+  if (s.al != null) {
+    if (r >= s.al + 0.5) return 3;
+    if (r >= s.al) return 2;
+    if (r >= s.al - 0.8) return 1;
+    return 0;
+  }
+  if (s.p99 != null && r >= s.p99) return 3;
+  if (s.p95 != null && r >= s.p95) return 2;
+  if (s.p90 != null && r >= s.p90) return 1;
+  return 0;
+}
+
+const fmtM = v => (v == null ? '' : (Math.round(v * 100) / 100).toFixed(2).replace('.', ',') + ' m');
+
+/* texto llano, explicativo, sin jerga */
+function hydroWords(level, o) {
+  const r = o.now, al = o.al, ev = o.ev;
+  const T = {
+    0: ['El río está bajo', 'El río está en su nivel habitual para esta época.',
+      'Podés seguir con tu vida normal.'],
+    1: ['El río está subiendo', 'El río viene creciendo y se está acercando al nivel de alerta.',
+      'Todavía no hay que evacuar. Si vivís cerca de la costa o en zona baja, estate atento.'],
+    2: ['Alerta por crecida', 'El agua llegó al nivel de alerta: ya empieza a entrar en las zonas bajas y a cortar caminos.',
+      'Sacá del piso lo que puedas y tené listo lo importante por si hay que salir. Evitá la costa.'],
+    3: ['Crecida: hay que salir', 'El agua llegó al nivel de evacuación: las zonas bajas se inundan.',
+      'Si estás en zona baja o cerca de la costa, salí y no vuelvas hasta que el agua baje. No cruces calles anegadas.'],
+    4: ['Crecida grave', 'El agua ya pasó el nivel de evacuación y la zona baja está bajo agua.',
+      'Si estás en zona baja o cerca de la costa, salí ahora. No vuelvas hasta que las autoridades lo confirmen. Pedí ayuda a Defensa Civil o a emergencias.']
+  };
+  const [headline, line, advice] = T[level] || T[0];
+
+  /* detalle concreto: cuánto mide, cómo viene y cuándo pasó algo parecido */
+  let detail = '';
+  if (r != null) {
+    const refs = [];
+    if (al != null) refs.push('alerta ' + fmtM(al));
+    if (ev != null) refs.push('evacuación ' + fmtM(ev));
+    detail = 'Hoy el agua está en ' + fmtM(r) +
+      (refs.length ? ' (' + refs.join(' · ') + ')' : '') + '.';
+  }
+
+  /* ¿hacía cuánto que no había tanta agua? (dato que más pesa, va primero) */
+  if (r != null && Array.isArray(o.above) && o.above.length) {
+    const prev = o.above.filter(x => x[1] >= r && x[0] < o.today);
+    if (!prev.length) {
+      detail += ' No se veía un nivel así en toda la serie de la estación.';
+    } else {
+      const yr = prev[prev.length - 1][0].slice(0, 4);
+      if (Number(yr) <= new Date().getFullYear() - 3) {
+        detail += ' No se veía un nivel así desde ' + yr + '.';
+      }
+    }
+  }
+
+  const sl = o.slope || 0;
+  if (sl >= 0.05) {
+    const proj = r + sl * 2;
+    detail += ' Viene subiendo ' + fmtM(sl).replace(' m', '') + ' m por día' +
+      (sl >= 0.15 ? '; si sigue así, en 2 días podría llegar a ' + fmtM(proj) : '') + '.';
+  } else if (sl <= -0.05) {
+    detail += ' Ya está bajando.';
+  }
+
+  return { headline, line, advice, detail: detail.trim() };
+}
+
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v6:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v9:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
@@ -463,40 +647,75 @@ async function hydroFor(env, lat, lon) {
   if (inaName && st.d != null && (!riverPoint || st.d <= riverPoint.d)) {
     out.river = inaName + ' (' + st.d.toFixed(1) + ' km)';
   } else if (riverPoint) {
-    out.river = riverPoint.name + ' (' + riverPoint.d + ' km)';
+    out.river = riverPoint.name + ' (' + String(riverPoint.d).replace('.', ',') + ' km)';
   } else {
     out.river = inaName || 'Río cercano';
   }
   out.riverPoint = riverPoint ? { lat: riverPoint.lat, lon: riverPoint.lon } : null;
 
-  const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
-  const ratio95 = (q != null && p95) ? q / p95 : 0;
-  let score = 0;
-  if (q != null && p90 && q >= p90) score += 1;
-  if (ratio95 >= 1.15) score += 2;
-  if (ratio95 >= 1.35) score += 1;
-  if (out.rain48 >= 25) score += 1;
-  if (q != null && p90 && q >= p90 * 1.5 && out.rain48 >= 15) score += 1;
-  out.level = score >= 3 ? 2 : score >= 2 ? 1 : 0;
-  out.ratio95 = Math.round(ratio95 * 100) / 100;
+  /* 1º: estación con umbrales oficiales cerca. 2º: la más cercana. */
+  const probe = out.stations.find(s => s.al != null && s.d <= 30) || st;
 
-  out.levelWord = out.level === 0 ? 'normal' : out.level === 1 ? 'alto' : 'crecida';
+  let src = null, obs = null;
+  if (probe) {
+    try {
+      src = await inaSeries(env, probe);
+      if (src) obs = await inaNow(env, src.seriesId);
+    } catch (e) { }
+  }
 
-  out.plain = out.level === 0
-    ? 'El río está en su nivel habitual.'
-    : out.level === 1
-      ? 'El río viene creciendo y está por encima de lo habitual.'
-      : 'El río está más alto que casi todos los días de los últimos 3 meses.';
+  if (obs && obs.now != null) {
+    /* ---- fuente primaria: agua medida contra los umbrales de la estación ---- */
+    out.source = 'ina';
+    out.station = { id: probe.id, name: probe.n, d: Math.round(probe.d * 10) / 10 };
+    out.now = obs.now;
+    out.date = obs.date;
+    out.al = src.al != null ? src.al : null;
+    out.ev = src.ev != null ? src.ev : null;
+    out.ab = src.ab != null ? src.ab : null;
+    out.p99 = src.p99 != null ? src.p99 : null;
+    out.maxHist = src.max != null ? src.max : null;
+    out.d3 = obs.d3;
+    out.d7 = obs.d7;
+    out.slope = obs.slope;
+    out.level = hydroLevel(obs.now, src);
 
-  out.advice = out.level === 0
-    ? ''
-    : out.level === 1
-      ? 'Todavía no es una crecida, pero conviene estar atento si estás cerca de la costa.'
-      : 'Si estás cerca de la costa o en zona baja, evitá el lugar y seguí el aviso.';
+    const w = hydroWords(out.level, {
+      now: out.now, al: out.al, ev: out.ev, slope: out.slope,
+      above: src.above, today: String(obs.date).slice(0, 10)
+    });
+    out.headline = w.headline;
+    out.plain = w.line;
+    out.detail = w.detail;
+    out.advice = w.advice;
+    out.levelWord = ['normal', 'alto', 'alerta', 'evacuacion', 'grave'][out.level];
+    out.river = (src.name || probe.n) +
+      (probe.d != null ? ' (' + probe.d.toFixed(1).replace('.', ',') + ' km)' : '');
+  } else {
+    /* ---- respaldo: modelo global GloFAS (solo si no hay lectura local) ---- */
+    out.source = 'glofas';
+    const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
+    const ratio95 = (q != null && p95) ? q / p95 : 0;
+    let score = 0;
+    if (q != null && p90 && q >= p90) score += 1;
+    if (ratio95 >= 1.15) score += 2;
+    if (ratio95 >= 1.35) score += 1;
+    if (out.rain48 >= 25) score += 1;
+    if (q != null && p90 && q >= p90 * 1.5 && out.rain48 >= 15) score += 1;
+    out.level = score >= 3 ? 2 : score >= 2 ? 1 : 0;
+    out.ratio95 = Math.round(ratio95 * 100) / 100;
+
+    const w = hydroWords(out.level, out);
+    out.headline = w.headline;
+    out.plain = w.line;
+    out.detail = 'Estimado con un modelo regional: no hay medición directa cerca.';
+    out.advice = w.advice;
+    out.levelWord = ['normal', 'alto', 'alerta', 'evacuacion', 'grave'][out.level];
+  }
 
   out.msg = out.plain;
 
-  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
+  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 1800 });
   return out;
 }
 
@@ -572,14 +791,14 @@ function quietNow() {
 }
 
 /* ---------------- Push ---------------- */
-async function sendPush(env, sub, title, body, tag) {
+async function sendPush(env, sub, title, body, tag, kind = 'alert', level = 0) {
   const vapid = {
     subject: env.VAPID_SUBJECT,
     publicKey: env.VAPID_PUBLIC,
     privateKey: env.VAPID_PRIVATE
   };
   const payload = await buildPushPayload(
-    { data: JSON.stringify({ title, body, tag, url: '/' }), options: { ttl: 3600, urgency: 'high' } },
+    { data: JSON.stringify({ title, body, tag, kind, level, url: '/' }), options: { ttl: 3600, urgency: 'high' } },
     sub,
     vapid
   );
@@ -620,7 +839,7 @@ async function runAlerts(env) {
               env, rec.sub,
               `${LEVELS[level].emoji} ${LEVELS[level].name} · ${ph.emoji} ${ph.word} en ${tag}`,
               `${ph.word} en las próximas 3 horas. Abrí ASN para ver el detalle.`,
-              tag
+              tag, ph.key, level
             );
           if (r === 'gone') { gone = true; break; }
           if (r === 'ok') rec.at[tag] = Date.now();
@@ -630,15 +849,22 @@ async function runAlerts(env) {
           const hk = tag + ':hydro';
           const hPrev = (rec.hydroLast && rec.hydroLast[hk]) || 0;
           const hQuiet = quietNow() && h.level < 2;
-          if (h.level >= 1 && h.level > hPrev && !hQuiet) {
+          rec.hydroAt = rec.hydroAt || {};
+          const hLastAt = rec.hydroAt[hk] || 0;
+          /* sube de nivel, o sigue en rojo/morado y ya pasaron 6 h */
+          const hRepeat = h.level >= 3 && Date.now() - hLastAt >= 6 * 3600 * 1000;
+          if (h.level >= 1 && (h.level > hPrev || hRepeat) && !hQuiet) {
+            const L = LEVELS[h.level];
             const r2 = await sendPush(
               env, rec.sub,
-              '🌊 ' + (h.level >= 2 ? 'El río está creciendo' : 'El río está alto') +
-              ' · ' + (h.river || 'río cercano'),
-              h.plain + ' ' + (h.advice || '') + ' Cerca de ' + tag + '.',
-              'hydro-' + hk
+              `${L.emoji} ${L.name} · 🌊 ${h.headline || 'Crecida cerca'}` +
+              (h.river ? ' · ' + h.river : ''),
+              h.plain + ' ' + (h.detail || '') + ' ' + (h.advice || '') +
+              ' Cerca de ' + tag + '.',
+              'hydro-' + hk, 'flood', h.level
             );
             if (r2 === 'gone') { gone = true; break; }
+            if (r2 === 'ok') rec.hydroAt[hk] = Date.now();
           }
           rec.hydroLast = rec.hydroLast || {};
           rec.hydroLast[hk] = h.level;
@@ -656,6 +882,7 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
 
 
 

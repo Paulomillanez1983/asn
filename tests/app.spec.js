@@ -18,6 +18,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function seed(page, level = 0) {
+  await page.waitForTimeout(700); // deja que el refresh abortado se asiente
   await page.evaluate((lvl) => {
     refresh = async () => { }; // evita que el fetch real pise los datos sembrados
     const times = Array.from({ length: 12 }, (_, i) => `2026-10-19T${String(12 + i).padStart(2, '0')}:00`);
@@ -132,20 +133,53 @@ test('la respuesta trae cabeceras de seguridad', async ({ request }) => {
 
 
 
-test('el banner de crecida aparece con hidrología en nivel 2', async ({ page }) => {
+const HYDRO_ITATI = {
+  level: 4, source: 'ina', now: 8.17, al: 6.8, ev: 7.5, p99: 7.64,
+  rain48: 0, river: 'Itatí (0,5 km)', station: { id: 17, name: 'Itatí', d: 0.5 },
+  headline: 'Crecida grave',
+  plain: 'El agua ya pasó el nivel de evacuación y sigue alta.',
+  detail: 'Hoy el agua está en 8,17 m (alerta 6,80 m · evacuación 7,50 m).',
+  advice: 'Si estás en zona baja o cerca de la costa, salí ahora.'
+};
+
+test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async ({ page }) => {
   await page.goto('/');
   await seed(page, 0);
-  await page.evaluate(() => {
-    S.data.t1.hydro = {
-      level: 2, q: 21877, p95: 17741, rain48: 0,
-      river: 'Paraná (0.3 km)',
-      plain: 'El río está más alto que casi todos los días de los últimos 3 meses.',
-      advice: 'Si estás cerca de la costa o en zona baja, evitá el lugar.'
-    };
+  await page.evaluate((h) => {
+    S.data.t1.hydro = h;
     paint();
-  });
-  await expect(page.getByText('El río está creciendo cerca de Casa')).toBeVisible();
-  await expect(page.getByText(/Paraná \(0\.3 km\)/).first()).toBeVisible();
-  await expect(page.locator('.chip3h').first()).toContainText('Crecida');
+  }, HYDRO_ITATI);
+
+  // encabezado: la crecida manda sobre el clima tranquilo
+  await expect(page.locator('#sub')).toContainText('Crecida grave en un lugar');
+
+  const card = page.locator('.hero.flood4');
+  await expect(card).toHaveCount(1);
+
+  // mismo color que la escala del clima (morado) pero con el ícono de agua
+  await expect(card.locator('.title')).toHaveText('Crecida grave');
+  await expect(card.locator('.chip3h')).toContainText('Crecida grave');
+  await expect(card).not.toContainText('Todo tranquilo');
+  await expect(card).not.toContainText('Buen momento para estar afuera');
+  await expect(card).toContainText('salí ahora');
+  await expect(card.locator('.hdetail')).toContainText('8,17 m');
+
+  // y el banner de arriba también
+  await expect(page.getByText('Crecida grave · Casa')).toBeVisible();
+});
+
+test('con el río en alerta el clima tranquilo se aclara, no se esconde', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+  await page.evaluate((h) => {
+    S.data.t1.hydro = { ...h, level: 2, headline: 'Alerta por crecida',
+      plain: 'El agua llegó al nivel de alerta: ya empieza a entrar en las zonas bajas y a cortar caminos.' };
+    paint();
+  }, HYDRO_ITATI);
+
+  const card = page.locator('.hero.flood2');
+  await expect(card).toHaveCount(1);
+  await expect(card.locator('.title')).toHaveText('Alerta por crecida');
+  await expect(card).toContainText('El clima, por ahora, tranquilo');
 });
 

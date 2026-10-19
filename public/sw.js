@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v44';
+﻿const CACHE = 'asn-v49';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -48,14 +48,31 @@ self.addEventListener('push', e => {
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
   const title = d.title || 'ASN 4.0';
   const body = d.body || 'Hay una alerta nueva en tus lugares.';
+
+  const MAP = {
+    lluvia: 'rain', llovizna: 'rain', torrencial: 'rain', rain: 'rain',
+    viento: 'wind', wind: 'wind',
+    granizo: 'hail', hail: 'hail',
+    nieve: 'snow', snow: 'snow',
+    tormenta: 'storm', storm: 'storm',
+    flood: 'flood', hydro: 'flood'
+  };
+  const kind = MAP[d.kind] || 'alert';
+  const level = Number(d.level || 0);
+
+  const vib = kind === 'flood' ? [420, 140, 420, 140, 420]
+    : kind === 'storm' ? [220, 90, 220, 90, 380]
+      : [300, 100, 300];
+
   e.waitUntil(self.registration.showNotification(title, {
     body,
     icon: 'icon-192.png',
-    badge: 'icon-192.png',
-    vibrate: [300, 100, 300],
-    requireInteraction: true,
-    tag: d.tag || 'asn',
-    data: { url: d.url || './', speech: d.speech || d.title || '' }
+    badge: 'badge-' + kind + '.png',
+    vibrate: vib,
+    requireInteraction: level >= 2,
+    renotify: true,
+    tag: d.tag || ('asn-' + kind),
+    data: { url: d.url || './', speech: d.speech || d.title || '', kind }
   }));
 });
 
@@ -77,6 +94,7 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
 
 
 
