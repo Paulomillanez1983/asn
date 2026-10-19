@@ -59,6 +59,15 @@ a{color:#93c5fd;text-decoration:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* tarjeta principal */
+/* rail horizontal de lugares */
+.rail{display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;
+  margin:0 -16px 4px;padding:4px 16px 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.rail::-webkit-scrollbar{display:none}
+.rail .hero{flex:0 0 87%;scroll-snap-align:center;margin:0}
+.raildots{display:flex;gap:6px;justify-content:center;margin:2px 0 8px}
+.raildots i{width:6px;height:6px;border-radius:50%;background:#2a3a58;transition:width .2s,background .2s}
+.raildots i.on{width:18px;border-radius:3px;background:#7dd3fc}
+
 .hero{
   position:relative;border-radius:var(--r);padding:18px;margin:0 0 14px;overflow:hidden;
   background:linear-gradient(165deg,#13202f,#0c1524);
@@ -76,6 +85,23 @@ a{color:#93c5fd;text-decoration:none}
 .hero.lv2{--glow:#fb923c;background:linear-gradient(165deg,#301d0e,#121a2b);border-color:rgba(251,146,60,.28)}
 .hero.lv3{--glow:#f87171;background:linear-gradient(165deg,#33111a,#17101f);border-color:rgba(248,113,113,.38)}
 .hero.lv4{--glow:#c084fc;background:linear-gradient(165deg,#2a1238,#170f26);border-color:rgba(192,132,252,.42)}
+/* desde amarilla: borde de luz que recorre la tarjeta */
+@property --ang{syntax:'<angle>';inherits:false;initial-value:0deg}
+.hero.alert::before{
+  content:"";position:absolute;inset:0;border-radius:inherit;padding:1.6px;
+  background:conic-gradient(from var(--ang),transparent 0 62%,var(--glow) 78%,#fff 84%,var(--glow) 90%,transparent 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  animation:rot 4.6s linear infinite;pointer-events:none;opacity:.95;
+}
+@keyframes rot{to{--ang:360deg}}
+.hero.alert::after{
+  content:"";position:absolute;top:0;left:-40%;width:38%;height:100%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.10),transparent);
+  transform:skewX(-14deg);animation:sweep 5.2s ease-in-out infinite;pointer-events:none;
+}
+@keyframes sweep{0%{left:-45%}55%{left:120%}100%{left:120%}}
+.hero.alert .main{position:relative;z-index:1}
 .hero .where{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
 .hero .where b{color:#e8f0ff;font-weight:650;letter-spacing:.1px}
 .hero .chip3h{background:rgba(255,255,255,.06);padding:3px 9px;border-radius:999px;font-size:11px}

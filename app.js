@@ -22,7 +22,7 @@ const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
-  askPlace: null, radarResult: null
+  askPlace: null, radarResult: null, learn: {}
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -40,12 +40,13 @@ function load() {
   S.places = Array.isArray(raw.places) ? raw.places : [];
   S.feedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
+  S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
   S.topic = raw.topic || DEFAULT_TOPIC;
 }
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      places: S.places, topic: S.topic, last: S.last, feedback: S.feedback
+      places: S.places, topic: S.topic, last: S.last, feedback: S.feedback, learn: S.learn
     }));
   } catch (e) { }
 }
@@ -447,6 +448,7 @@ async function refresh() {
       const agg = aggregate(res.value.det.hourly, res.value.ens);
       agg.times = res.value.det.hourly.time;
       agg.current = res.value.det.current;
+      applyLearning(p, agg);
       S.data[p.id] = agg;
       ok++;
       checkAlert(p, agg);
@@ -570,7 +572,7 @@ function paint() {
   if (S.view === 'settings') view.innerHTML = viewSettings();
   else if (S.view === 'add') { /* la vista se arma aparte */ }
   else if (S.view === 'install') view.innerHTML = viewInstall();
-  else view.innerHTML = viewHome();
+  else { view.innerHTML = viewHome(); bindRail(); }
 }
 
 function viewEmpty() {
@@ -592,12 +594,34 @@ function viewEmpty() {
 function viewHome() {
   const ordered = [...S.places].sort((a, b) => (levelOf(b) - levelOf(a)) || a.name.localeCompare(b.name));
   const loading = S.busy && !Object.keys(S.data).length;
-  const body = loading
-    ? '<div class="skel hero-sk"></div><div class="skel hero-sk" style="height:140px"></div>'
-    : ordered.map(heroHtml).join('');
+  let body;
+  if (loading) {
+    body = '<div class="skel hero-sk"></div><div class="skel hero-sk" style="height:140px"></div>';
+  } else {
+    body = '<div class="rail">' + ordered.map(heroHtml).join('') + '</div>' +
+      (ordered.length > 1
+        ? '<div class="raildots">' + ordered.map((_, i) => `<i class="${i === 0 ? 'on' : ''}"></i>`).join('') + '</div>'
+        : '');
+  }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
   return installBanner() + notifyBanner() + body + add +
-    `<div class="foot" style="margin-top:16px">Tocá “Ver detalles” si querés los datos finos.</div>`;
+    `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
+}
+
+function bindRail() {
+  const rail = document.querySelector('.rail');
+  const dots = document.querySelectorAll('.raildots i');
+  if (!rail || !dots.length) return;
+  const upd = () => {
+    const step = rail.clientWidth * 0.87 + 12;
+    const i = Math.max(0, Math.min(dots.length - 1, Math.round(rail.scrollLeft / step)));
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+  };
+  rail.addEventListener('scroll', () => {
+    clearTimeout(bindRail._t);
+    bindRail._t = setTimeout(upd, 70);
+  });
+  upd();
 }
 
 function installBanner() {
@@ -652,7 +676,7 @@ function heroHtml(p) {
     ? `<button class="ghost" data-ask="${p.id}" style="padding:7px 10px;font-size:12px">¿Está pasando?</button>`
     : '';
 
-  return `<section class="hero ${info.cls}">
+  return `<section class="hero ${info.cls}${d.level >= 1 ? ' alert' : ''}">
     <div class="where"><span>📍 <b>${esc(p.name)}</b></span><span class="chip3h">${esc(info.pill)}</span></div>
 
     <div class="main">
@@ -744,7 +768,10 @@ function probHtml(d) {
   if (d.snow3 >= 0.2) bits.push('nieve <b>' + d.snow3.toFixed(1) + ' cm</b>');
   const g12 = Math.round(maxGust(d, 12));
   if (g12 >= 25) bits.push('ráfagas hasta <b>' + g12 + ' km/h</b>');
-  return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}</div>`;
+  const bestLine = d.best
+    ? `<br>Fuente que más acierta acá: <b>${MODEL_NAME[d.best.src] || 'el ensemble'}</b> (${d.best.h}/${d.best.n})`
+    : '';
+  return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}${bestLine}</div>`;
 }
 
 function barsHtml(d) {
@@ -795,6 +822,19 @@ function viewInstall() {
     <div style="margin-top:16px"><button class="ghost" id="back" style="width:100%">← Volver</button></div>`;
 }
 
+function learnHtml() {
+  const names = { lluvia: 'lluvia', viento: 'viento', granizo: 'granizo', calma: 'calma' };
+  const rows = [];
+  S.places.forEach(p => {
+    Object.keys(S.learn[p.id] || {}).forEach(ph => {
+      const b = bestSource(p.id, ph);
+      if (!b) return;
+      rows.push(`<div class="row"><div class="grow"><b>${esc(p.name)} · ${names[ph] || ph}</b><small>${MODEL_NAME[b.src] || 'ensemble'} · ${b.h} de ${b.n}</small></div></div>`);
+    });
+  });
+  return rows.join('');
+}
+
 function viewSettings() {
   const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
   const rows = S.places.map(p => `<div class="row">
@@ -836,9 +876,10 @@ function viewSettings() {
     <p class="hint">Instalá la app <b>ntfy</b> en el celular y suscribite a este canal: así llegan los avisos aunque ASN esté cerrada.</p>
   </div>
 
-  <div class="sec">Qué modelo acierta más acá</div>
+  <div class="sec">Qué fuente acierta más acá</div>
   <div class="card">
-    ${scoreRows || `<p>Cuando respondas “¿Está pasando?”, acá vas a ver qué modelo le pega más en tu zona.</p>`}
+    ${learnHtml() || scoreRows || `<p>Cuando respondas “¿Qué estás viendo?”, acá vas a ver qué fuente le pega más en tu zona.</p>`}
+    <p class="hint">Con 5 reportes y 70 % de acierto, esa fuente puede subir el nivel de la tarjeta cuando marca algo más grave que el resto.</p>
   </div>
 
   <div class="sec">Escala de alertas</div>
@@ -1063,6 +1104,58 @@ function radarText(a, r) {
     : 'El radar <b>no ve lluvia</b> en tu zona en este momento.';
 }
 
+/* ===================== Aprendizaje con los reportes ===================== */
+function learnAdd(placeId, ph, src, hit) {
+  const L = S.learn[placeId] = S.learn[placeId] || {};
+  const P = L[ph] = L[ph] || {};
+  const b = P[src] = P[src] || { h: 0, n: 0 };
+  b.n++;
+  if (hit) b.h++;
+}
+
+function bestSource(placeId, ph) {
+  const bucket = ((S.learn[placeId] || {})[ph]) || {};
+  const rows = Object.keys(bucket)
+    .map(src => ({ src, h: bucket[src].h, n: bucket[src].n, rate: bucket[src].n ? bucket[src].h / bucket[src].n : 0 }))
+    .filter(r => r.n >= 3);
+  rows.sort((a, b) => b.rate - a.rate || b.n - a.n);
+  return rows[0] || null;
+}
+
+function evaluateReport(p, a) {
+  const d = S.data[p.id];
+  if (!d) return;
+  const ph = a === 'hail' ? 'granizo' : (a === 'gust' || a === 'wind') ? 'viento' : a === 'rain' ? 'lluvia' : 'calma';
+  d.models.forEach(m => {
+    const pred = {
+      lluvia: m.rain,
+      viento: m.wind || m.hours.slice(0, 3).some(h => h.gust >= 40),
+      granizo: false
+    };
+    const hit = a === 'no' ? (!pred.lluvia && !pred.viento) : !!pred[ph];
+    learnAdd(p.id, ph, m.m, hit);
+  });
+  if (d.ens) {
+    const pred = { lluvia: d.ens.rain15 >= 0.30, viento: d.ens.gust60 >= 0.40, granizo: false };
+    learnAdd(p.id, ph, 'ens', a === 'no' ? (!pred.lluvia && !pred.viento) : !!pred[ph]);
+  }
+  save();
+}
+
+/* Si una fuente viene acertando en esta zona y marca más grave, subimos un nivel */
+function applyLearning(p, agg) {
+  const ph = phenomenon(agg).key;
+  const best = bestSource(p.id, ph);
+  agg.best = best;
+  if (best && best.n >= 5 && best.rate >= 0.70) {
+    const m = agg.models.find(x => x.m === best.src);
+    if (m && m.l > agg.level) {
+      agg.level = Math.min(4, m.l);
+      agg.boostedBy = best.src;
+    }
+  }
+}
+
 function recordFeedback(p, a) {
   const d = S.data[p.id];
   if (!d) return;
@@ -1088,13 +1181,23 @@ document.addEventListener('click', ev => {
     const a = t.getAttribute('data-askans');
     const p = S.places.find(x => x.id === S.askPlace);
     const res = document.getElementById('askResult');
-    if (p) recordFeedback(p, a);
-    if (res) { res.hidden = false; res.innerHTML = 'Revisando el radar de tu zona…'; }
+    if (p) { recordFeedback(p, a); evaluateReport(p, a); }
+    if (res) {
+      res.hidden = false;
+      res.innerHTML = '<b>¡Gracias por el reporte!</b><br>Revisando el radar de tu zona…';
+    }
     if (p) {
       radarCheck(p).then(r => {
-        if (res) res.innerHTML = radarText(a, r) + '<br><span style="color:#7d90b3;font-size:12px">Cruzamos tu reporte con el radar y los modelos.</span>';
+        if (a === 'rain') learnAdd(p.id, 'lluvia', 'radar', r === 'rain');
+        if (a === 'no') learnAdd(p.id, 'calma', 'radar', r === 'clear');
         const fb = S.feedback[S.feedback.length - 1];
-        if (fb && !fb.radar) { fb.radar = r; save(); }
+        if (fb && !fb.radar) fb.radar = r;
+        save();
+        if (res) {
+          res.innerHTML = '<b>¡Gracias por el reporte!</b><br>' + radarText(a, r) +
+            '<br><span style="color:#7d90b3;font-size:12px">Con esto ASN aprende qué fuente acierta en tu zona.</span>';
+        }
+        setTimeout(() => { closeAsk(true); toast('Reporte guardado. Gracias'); }, 5000);
       });
     } else {
       closeAsk(true);
@@ -1164,7 +1267,7 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-ans')) {
     const id = t.getAttribute('data-place');
     const p = S.places.find(x => x.id === id);
-    if (p) recordFeedback(p, t.getAttribute('data-ans'));
+    if (p) { recordFeedback(p, t.getAttribute('data-ans')); evaluateReport(p, t.getAttribute('data-ans')); }
     S.askFor = null;
     paint();
     toast('Anotado. Gracias');
