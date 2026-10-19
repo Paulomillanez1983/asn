@@ -1,4 +1,4 @@
-/**
+﻿/**
  * alert.mjs — chequeo en segundo plano (GitHub Actions, cada 10 min).
  * Lee los lugares del secreto PLACES (JSON) y publica en ntfy.sh cuando el
  * riesgo sube. No necesita servidor propio.
@@ -139,3 +139,4 @@ async function main() {
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
+
