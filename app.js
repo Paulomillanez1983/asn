@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 /* ============ Config ============ */
 const MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'gem_seamless'];
@@ -14,8 +14,7 @@ const DEFAULT_TOPIC = 'alertameteo-cba-7q4m9k2x';
 
 const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
-  data: {}, updated: 0, busy: false, view: 'home', installEvt: null, q: '', results: [],
-  obs: null
+  data: {}, updated: 0, busy: false, view: 'home', installEvt: null, q: '', results: []
 };
 
 /* ============ Storage ============ */
@@ -111,6 +110,7 @@ async function fetchPlace(p) {
   u.searchParams.set('latitude', p.lat);
   u.searchParams.set('longitude', p.lon);
   u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code');
+  u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
   u.searchParams.set('models', MODELS.join(','));
   u.searchParams.set('forecast_hours', '13');
   u.searchParams.set('timezone', 'auto');
@@ -119,7 +119,36 @@ async function fetchPlace(p) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j.hourly || !j.hourly.time) throw new Error('sin datos');
-  return j.hourly;
+  return { hourly: j.hourly, current: j.current };
+}
+
+const WMO = [
+  [0, 'despejado'], [1, 'mayormente despejado'], [2, 'parcialmente nublado'], [3, 'nublado'],
+  [45, 'niebla'], [48, 'niebla helada'],
+  [51, 'llovizna débil'], [53, 'llovizna'], [55, 'llovizna fuerte'],
+  [61, 'lluvia débil'], [63, 'lluvia'], [65, 'lluvia fuerte'],
+  [66, 'lluvia helada'], [67, 'lluvia helada fuerte'],
+  [71, 'nieve débil'], [73, 'nieve'], [75, 'nieve fuerte'], [77, 'aguanieve'],
+  [80, 'chaparrones'], [81, 'chaparrones fuertes'], [82, 'chaparrones violentos'],
+  [85, 'chaparrones de nieve'], [86, 'chaparrones de nieve fuertes'],
+  [95, 'tormenta'], [96, 'tormenta con granizo'], [99, 'tormenta con granizo fuerte']
+];
+function wmoText(code) {
+  if (code == null) return '';
+  let out = '';
+  for (const [c, t] of WMO) if (code >= c) out = t;
+  return out;
+}
+
+function nowHtml(c) {
+  if (!c) return '';
+  const t = c.temperature_2m != null ? Math.round(c.temperature_2m) + ' °C' : '';
+  const w = c.wind_speed_10m != null ? Math.round(c.wind_speed_10m) : null;
+  const g = c.wind_gusts_10m != null ? Math.round(c.wind_gusts_10m) : null;
+  const desc = wmoText(c.weather_code);
+  const bits = [t, w != null ? 'viento ' + w + ' km/h' : '', (g != null && w != null && g - w > 8) ? 'ráfagas ' + g : '', desc].filter(Boolean);
+  const raining = (c.precipitation || 0) > 0;
+  return `<div class="chips"><span class="chip">Ahora: ${bits.join(' · ')}</span>${raining ? '<span class="chip on">está lloviendo</span>' : ''}</div>`;
 }
 
 async function fetchCanal(topic) {
@@ -143,58 +172,19 @@ async function fetchCanal(topic) {
   } catch (e) { return 'Canal: sin conexión'; }
 }
 
-/* Observación real: METAR del aeropuerto de Córdoba (NOAA, sin clave) */
-async function fetchObs() {
-  const r = await fetch('https://aviationweather.gov/api/data/metar?ids=SACO&format=json&hours=1', { cache: 'no-store' });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const j = await r.json();
-  if (!Array.isArray(j) || !j.length) throw new Error('sin METAR');
-  return j[0];
-}
-
-function obsHtml() {
-  const o = S.obs;
-  if (!o) return '';
-  const raw = o.rawOb || '';
-  const tokens = raw.split(/\s+/);
-  const has = k => tokens.some(t => t.includes(k));
-  const phen = [];
-  if (has('TS')) phen.push('tormenta');
-  if (has('GR')) phen.push('granizo');
-  if (has('RA') || has('DZ') || has('SH')) phen.push('lluvia');
-
-  const gustM = raw.match(/(\d{3}|VRB)(\d{2})G(\d{2})KT/);
-  const windKmh = o.wspd != null ? Math.round(o.wspd * 1.852) : null;
-  const gustKmh = gustM ? Math.round(Number(gustM[3]) * 1.852) : null;
-  const worst = Math.max(gustKmh || 0, windKmh || 0);
-  const cls = (phen.includes('tormenta') || phen.includes('granizo')) ? ' bad' : (worst >= 50 || phen.length ? ' warn' : '');
-  const temp = o.temp != null ? o.temp + ' °C' : '—';
-  const time = o.reportTime ? o.reportTime.slice(11, 16) : '';
-
-  return `<div class="obs${cls}" title="${esc(raw)}">
-    <span>🛬 <b>Ahora en Córdoba</b> · ${temp}</span>
-    ${windKmh != null ? `<span class="tag">viento ${windKmh} km/h${gustKmh ? ' · ráfagas ' + gustKmh : ''}</span>` : ''}
-    <span class="tag">${phen.length ? phen.join(', ') : 'sin lluvia'}</span>
-    ${time ? `<span class="tag">${time} hs</span>` : ''}
-  </div>`;
-}
-
 /* ============ Carga ============ */
 async function refresh() {
   if (S.busy) return;
   S.busy = true;
   render();
-  const [obs, results] = await Promise.all([
-    fetchObs().catch(() => null),
-    Promise.allSettled(S.places.map(p => fetchPlace(p)))
-  ]);
-  if (obs) S.obs = obs;
+  const results = await Promise.allSettled(S.places.map(p => fetchPlace(p)));
   let ok = 0;
   S.places.forEach((p, i) => {
     const res = results[i];
     if (res.status === 'fulfilled') {
-      S.data[p.id] = aggregate(res.value);
-      S.data[p.id].times = res.value.time;
+      S.data[p.id] = aggregate(res.value.hourly);
+      S.data[p.id].times = res.value.hourly.time;
+      S.data[p.id].current = res.value.current;
       ok++;
       checkAlert(p, S.data[p.id]);
     } else {
@@ -263,7 +253,7 @@ function viewEmpty() {
 function viewHome() {
   const cards = S.places.map(p => cardHtml(p)).join('');
   const q = pendingQuestion();
-  return obsHtml() + (q ? q : '') + cards + tipsHtml();
+  return (q ? q : '') + cards + tipsHtml();
 }
 
 function pendingQuestion() {
@@ -302,6 +292,7 @@ function cardHtml(p) {
     <div class="top"><div class="name">${esc(p.name)}</div>
       <div class="lvl">${lv.i} ${lv.t}</div></div>
     <div class="what">${bits || 'Sin fenómenos previstos en las próximas 3 h'}</div>
+    ${nowHtml(d.current)}
     ${votes ? `<div class="chips"><span class="chip on">${votes}</span></div>` : ''}
     <div class="dots">${dots}</div>
     ${bars}
@@ -526,3 +517,4 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+

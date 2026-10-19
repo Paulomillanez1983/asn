@@ -26,15 +26,9 @@ El nivel que ves en la tarjeta es **el que alcanzan al menos 2 de los 4 modelos*
 
 Además de la tarjeta, cada lugar tiene accesos directos al **radar** (RainViewer) y a los **rayos** (Blitzortung) para confirmar en el momento.
 
-## Observación en tiempo real
+## Condiciones actuales
 
-Arriba de las tarjetas aparece lo que **está pasando ahora** según el METAR del aeropuerto de Córdoba (SACO), que se emite cada 30–60 minutos:
-
-- temperatura, viento y ráfagas en km/h,
-- fenómenos presentes (lluvia, tormenta, granizo),
-- hora del reporte; el nombre del reporte crudo aparece al mantener presionado.
-
-Fuente: [NOAA Aviation Weather](https://aviationweather.gov/api/data/metar?ids=SACO&format=json) — pública, sin clave. Sirve de contraste: si el pronóstico dice "sin riesgo" y el aeropuerto reporta tormenta, mandan los datos observados.
+Cada tarjeta muestra una línea **"Ahora: 24 °C · viento 12 km/h · parcialmente nublado"**, calculada con el bloque `current` de Open-Meteo para ese punto exacto: temperatura, viento, ráfagas, código de tiempo y si está lloviendo en este momento. Viene en la misma llamada del pronóstico, así que no agrega demora ni tráfico.
 
 ## Avisos
 
@@ -84,7 +78,9 @@ El repositorio no contiene direcciones, teléfonos ni coordenadas. Los lugares s
 
 ## Nota de investigación: God's Eye View
 
-Se evaluó el proyecto [God's Eye View](https://github.com/bilawalsidhu/gods-eye-view) ("Ojos de Dios"), un globo 3D de código abierto que fusiona datos públicos. Sus capas meteorológicas —radar MRMS de NOAA nowCOAST, densidad de rayos, avisos de ciclones— **solo cubren Estados Unidos**, y el visor 3D no aporta nada a una alerta familiar. Se descartó como dependencia, pero se tomó su idea central: **sumar observación real**, que es lo que aporta la tira de METAR.
+Se evaluó el proyecto [God's Eye View](https://github.com/bilawalsidhu/gods-eye-view) ("Ojos de Dios"), un globo 3D de código abierto que fusiona datos públicos. Sus capas meteorológicas —radar MRMS de NOAA nowCOAST, densidad de rayos, avisos de ciclones— **solo cubren Estados Unidos**, y el visor 3D no aporta nada a una alerta familiar. Se descartó como dependencia, pero se tomó su idea de fondo: **mostrar también el estado actual**, que es lo que hace la línea "Ahora".
+
+También se probó el METAR del aeropuerto de Córdoba (SACO) por la API de NOAA: el dato es bueno, pero `aviationweather.gov` no envía cabeceras CORS y el navegador lo bloquea. Se descartó en vez de meter un proxy intermedio.
 
 ## Límites
 
