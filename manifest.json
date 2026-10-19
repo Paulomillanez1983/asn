@@ -1,8 +1,8 @@
 {
-  "id": "/paraguas/",
-  "name": "Paraguas — el clima antes de que te agarre",
-  "short_name": "Paraguas",
-  "description": "Te avisa si viene lluvia fuerte, ráfagas o granizo en tus lugares. Claro, visual y sin vueltas.",
+  "id": "/asn/",
+  "name": "ASN 4.0 — Alerta Super Niño",
+  "short_name": "ASN 4.0",
+  "description": "Monitor de inteligencia: te avisa si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica en tus lugares.",
   "lang": "es-AR",
   "dir": "ltr",
   "start_url": "./",

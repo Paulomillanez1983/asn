@@ -1,4 +1,4 @@
-﻿const CACHE = 'paraguas-v2';
+﻿const CACHE = 'asn-v1';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -33,15 +33,12 @@ self.addEventListener('fetch', e => {
   }
 
   if (sameOrigin) {
-    // stale-while-revalidate: responde rápido y actualiza en segundo plano
+    // red primero (código siempre al día), caché como respaldo sin conexión
     e.respondWith(
-      caches.match(req).then(hit => {
-        const net = fetch(req).then(r => {
-          if (r.ok) caches.open(CACHE).then(c => c.put(req, r.clone()));
-          return r;
-        }).catch(() => hit);
-        return hit || net;
-      })
+      fetch(req).then(r => {
+        if (r.ok) caches.open(CACHE).then(c => c.put(req, r.clone()));
+        return r;
+      }).catch(() => caches.match(req))
     );
   }
 });
@@ -55,6 +52,7 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
 
 
 

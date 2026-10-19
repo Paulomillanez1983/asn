@@ -3,9 +3,10 @@
 /* ===================== Configuración ===================== */
 const MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'gem_seamless'];
 const MODEL_NAME = { ecmwf_ifs025: 'ECMWF', gfs_seamless: 'GFS', icon_seamless: 'ICON', gem_seamless: 'GEM' };
-const KEY = 'paraguas.v1';
-const OLD_KEY = 'alerta-meteo.v2';
-const DEFAULT_TOPIC = 'paraguas-cba-7q4m9k2x';
+const KEY = 'asn.v1';
+const LEGACY = ['paraguas.v1', 'alerta-meteo.v2'];
+const DEFAULT_TOPIC = 'asn4-cba-7q4m9k2x';
+const INTRO_KEY = 'asn.intro';
 
 const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
@@ -16,16 +17,18 @@ const S = {
 function load() {
   let raw = {};
   try { raw = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { raw = {}; }
-  if (!raw.places) {
-    try {
-      const old = JSON.parse(localStorage.getItem(OLD_KEY) || '{}');
-      if (Array.isArray(old.places) && old.places.length) raw = old;
-    } catch (e) { }
+  if (!raw.places || !raw.places.length) {
+    for (const k of LEGACY) {
+      try {
+        const old = JSON.parse(localStorage.getItem(k) || '{}');
+        if (Array.isArray(old.places) && old.places.length) { raw = old; break; }
+      } catch (e) { }
+    }
   }
   S.places = Array.isArray(raw.places) ? raw.places : [];
   S.feedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
-  S.topic = raw.topic === 'alertameteo-cba-7q4m9k2x' ? DEFAULT_TOPIC : (raw.topic || DEFAULT_TOPIC);
+  S.topic = raw.topic || DEFAULT_TOPIC;
 }
 function save() {
   try {
@@ -73,67 +76,123 @@ function skyText(code) {
   for (const [c, t] of WMO) if (code >= c) out = t;
   return out;
 }
+/* series por nombre base, con o sin sufijo de modelo */
+function seriesByBase(H, base) {
+  return Object.keys(H)
+    .filter(k => k === base || k.startsWith(base + '_'))
+    .map(k => H[k]);
+}
 
-/* ===================== Riesgo ===================== */
+/* ===================== Riesgo determinístico (control) ===================== */
 function pointRisk(o) {
   const a = o.rain < 0.5 ? 0 : o.rain < 2.5 ? 1 : o.rain < 7.6 ? 2 : 3;
   const b = o.gust < 50 ? 0 : o.gust < 70 ? 1 : o.gust < 90 ? 2 : 3;
-  const hail = o.code >= 96 ? 3 : (o.cape >= 2500 && o.gust >= 80 ? 2 : (o.cape >= 1500 && o.gust >= 80 ? 1 : 0));
-  return { l: Math.max(a, b, hail), rain: a >= 1, wind: b >= 1, hail: hail >= 2 };
+  return { l: Math.max(a, b), rain: a >= 1, wind: b >= 1 };
 }
 
 function modelRisk(H, m) {
   const g = k => H[k + '_' + m] || [];
-  const pr = g('precipitation'), gu = g('wind_gusts_10m'), ca = g('cape'),
-    wc = g('weather_code'), pp = g('precipitation_probability');
-  let acc = 0, lvl = 0, rain = false, wind = false, hail = false;
+  const pr = g('precipitation'), gu = g('wind_gusts_10m'), pp = g('precipitation_probability');
+  let acc = 0, lvl = 0, rain = false, wind = false;
   const hours = [];
   for (let i = 0; i < pr.length; i++) {
     const r = pr[i] ?? 0;
-    const x = pointRisk({ rain: r, gust: gu[i] ?? 0, cape: ca[i] ?? 0, code: wc[i] ?? 0 });
+    const x = pointRisk({ rain: r, gust: gu[i] ?? 0 });
     if (i < 3) {
       acc += r;
       lvl = Math.max(lvl, x.l);
-      rain = rain || x.rain; wind = wind || x.wind; hail = hail || x.hail;
+      rain = rain || x.rain; wind = wind || x.wind;
     }
-    hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0, code: wc[i] ?? 0 });
+    hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0 });
   }
-  lvl = Math.max(lvl, acc >= 50 ? 3 : acc >= 25 ? 2 : 0);
-  return { m, l: lvl, rain, wind, hail, acc, hours };
+  lvl = Math.max(lvl, acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
+  return { m, l: lvl, rain, wind, acc, hours };
 }
 
-function aggregate(H) {
+/* ===================== Ensemble (51 escenarios) ===================== */
+function ensembleRisk(H) {
+  const ids = Object.keys(H)
+    .filter(k => /^precipitation_member\d+$/.test(k))
+    .map(k => k.replace('precipitation_member', ''));
+  const sum3 = key => {
+    let s = 0;
+    const arr = H[key] || [];
+    for (let i = 0; i < 3; i++) s += arr[i] ?? 0;
+    return s;
+  };
+  const rains = ids.map(id => sum3('precipitation_member' + id));
+  const gusts = ids.map(id => {
+    const arr = (H['wind_gusts_10m_member' + id] || []).slice(0, 3);
+    return arr.length ? Math.max(...arr.map(v => v ?? 0)) : 0;
+  });
+  const p = (arr, th) => arr.length ? arr.filter(v => v >= th).length / arr.length : 0;
+  const sortedRain = rains.slice().sort((a, b) => a - b);
+  return {
+    n: ids.length,
+    rain10: p(rains, 10), rain15: p(rains, 15), rain30: p(rains, 30), rain60: p(rains, 60),
+    gust60: p(gusts, 60), gust80: p(gusts, 80), gust100: p(gusts, 100),
+    medianRain: sortedRain.length ? sortedRain[Math.floor(sortedRain.length / 2)] : 0
+  };
+}
+
+function ensembleLevel(e) {
+  let l = 0;
+  if (e.rain15 >= 0.30) l = Math.max(l, 1);
+  if (e.rain30 >= 0.40) l = Math.max(l, 2);
+  if (e.rain60 >= 0.50) l = Math.max(l, 3);
+  if (e.gust60 >= 0.40) l = Math.max(l, 1);
+  if (e.gust80 >= 0.40) l = Math.max(l, 2);
+  if (e.gust100 >= 0.30) l = Math.max(l, 3);
+  return l;
+}
+
+/* ===================== Combina todo ===================== */
+function aggregate(H, ens) {
   const models = MODELS.map(m => modelRisk(H, m));
   const sorted = models.map(x => x.l).sort((a, b) => b - a);
-  const level = Math.min(3, Math.max(0, sorted[1] ?? sorted[0] ?? 0));
-  const votes = {
-    rain: models.filter(x => x.rain).length,
-    wind: models.filter(x => x.wind).length,
-    hail: models.filter(x => x.hail).length
+  const detLevel = Math.min(3, Math.max(0, sorted[1] ?? sorted[0] ?? 0));
+  const votes = { rain: models.filter(x => x.rain).length, wind: models.filter(x => x.wind).length };
+
+  const capeMax = seriesByBase(H, 'cape')
+    .reduce((max, s) => Math.max(max, ...s.slice(0, 3).map(v => v ?? 0)), 0);
+  const fzSeries = seriesByBase(H, 'freezing_level_height');
+  const freezing = fzSeries.length ? Math.max(...fzSeries[0].slice(0, 3).map(v => v ?? 0)) : 0;
+  const gustMax = Math.max(0, ...models.map(m => Math.max(...m.hours.slice(0, 3).map(h => h.gust))));
+
+  const eLevel = ens ? ensembleLevel(ens) : null;
+  let level = eLevel == null ? detLevel : eLevel;
+  /* si el determinístico y el ensemble discrepan en más de un nivel, se baja uno */
+  if (eLevel != null && Math.abs(detLevel - eLevel) > 1) level = Math.min(detLevel, eLevel) + 1;
+
+  const storm = capeMax >= 1000 && (!ens || ens.rain10 >= 0.30);
+  if (storm) level = Math.max(level, 1);
+
+  /* granizo: proxy con CAPE, ráfaga y nivel de congelamiento. Nunca sube nivel solo. */
+  const hailPossible = capeMax >= 1500 && gustMax >= 70 && freezing >= 3000 && freezing <= 4500;
+
+  return {
+    models, level: Math.min(3, level), detLevel, eLevel, votes,
+    capeMax, gustMax, freezing, storm, hailPossible, ens
   };
-  return { models, level, votes };
 }
 
 /* ===================== Lenguaje humano ===================== */
 function levelInfo(d) {
-  const rain = d.votes.rain >= 2, wind = d.votes.wind >= 2, hail = d.votes.hail >= 2;
-  const what = hail ? 'granizo' : wind ? 'ráfagas fuertes' : rain ? 'lluvia' : 'tormenta';
-  if (d.level === 0) {
-    return { cls: 'lv0', emoji: '😌', title: 'Todo tranquilo', line: 'No se espera nada raro en las próximas 3 horas.', action: 'Buen momento para estar afuera.', cta: '✅' };
-  }
-  if (d.level === 1) {
-    return { cls: 'lv1', emoji: '🌤️', title: 'Ojo con el cielo', line: 'Puede caer algo leve en las próximas 3 horas.', action: 'Si salís, llevá paraguas por las dudas.', cta: '☂️' };
-  }
-  if (d.level === 2) {
-    return {
-      cls: 'lv2', emoji: hail ? '🧊' : wind ? '💨' : '🌧️', title: 'Se viene ' + what,
-      line: 'Varios modelos coinciden para las próximas 3 horas.',
-      action: 'Guardá lo que tengas afuera y cerrá las ventanas.', cta: '⚠️'
-    };
-  }
+  const rain = d.votes.rain >= 2, wind = d.votes.wind >= 2;
+  let what = rain ? 'lluvia' : wind ? 'ráfagas fuertes' : 'viento';
+  if (d.storm) what = 'tormenta eléctrica';
+  if (d.hailPossible) what = 'granizo y tormenta';
+
+  if (d.level === 0) return { cls: 'lv0', emoji: '😌', title: 'Todo tranquilo', line: 'No se espera nada raro en las próximas 3 horas.', action: 'Buen momento para estar afuera.', cta: '✅' };
+  if (d.level === 1) return { cls: 'lv1', emoji: '🌤️', title: 'Ojo con el cielo', line: 'Puede caer algo leve en las próximas 3 horas.', action: 'Si salís, llevá paraguas por las dudas.', cta: '☂️' };
+  if (d.level === 2) return {
+    cls: 'lv2', emoji: d.hailPossible ? '🧊' : d.storm ? '⛈️' : wind ? '💨' : '🌧️',
+    title: 'Se viene ' + what, line: 'Varios escenarios coinciden para las próximas 3 horas.',
+    action: 'Guardá lo que tengas afuera y cerrá las ventanas.', cta: '⚠️'
+  };
   return {
-    cls: 'lv3', emoji: hail ? '🧊' : '⛈️', title: 'Peligro: ' + what,
-    line: 'Se viene fuerte, con alta coincidencia entre modelos.',
+    cls: 'lv3', emoji: d.hailPossible ? '🧊' : '⛈️', title: 'Peligro: ' + what,
+    line: 'Se viene fuerte, con alta coincidencia entre escenarios.',
     action: 'Quedate adentro. Evitá salir en auto si no hace falta.', cta: '🚨'
   };
 }
@@ -187,7 +246,7 @@ function quickHtml(d) {
     ['☂️ Paraguas', calm ? 'no' : 'sí'],
     ['👕 Tender', calm ? 'sí' : 'no'],
     ['🚲 Bici', (d.level >= 2 || maxGust(d, 6) >= 50) ? 'no' : 'sí'],
-    ['🚗 Auto afuera', (d.level >= 2 || d.votes.hail >= 2) ? 'no' : 'sí']
+    ['🚗 Auto afuera', (d.level >= 2 || d.hailPossible) ? 'no' : 'sí']
   ];
   return items.map(([k, v]) => `<span class="q ${v === 'sí' ? 'yes' : 'no'}">${k}: ${v}</span>`).join('');
 }
@@ -197,7 +256,7 @@ async function fetchPlace(p) {
   const u = new URL('https://api.open-meteo.com/v1/forecast');
   u.searchParams.set('latitude', p.lat);
   u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code');
+  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height');
   u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
   u.searchParams.set('models', MODELS.join(','));
   u.searchParams.set('forecast_hours', '13');
@@ -210,22 +269,20 @@ async function fetchPlace(p) {
   return { hourly: j.hourly, current: j.current };
 }
 
-async function fetchCanal(topic) {
-  if (!topic) return '';
-  try {
-    const r = await fetch('https://ntfy.sh/' + encodeURIComponent(topic) + '/json?poll=1&since=3h');
-    const txt = await r.text();
-    const rows = txt.trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
-      .filter(x => x && x.event === 'message')
-      .map(x => ({ t: x.time, v: parseFloat(x.message) }))
-      .filter(x => !isNaN(x.v));
-    if (!rows.length) return 'Canal sin datos';
-    const last = rows[rows.length - 1];
-    const base = rows.find(x => last.t - x.t <= 1800) || rows[0];
-    const d = last.v - base.v;
-    const age = Math.max(0, Math.round(Date.now() / 60000 - last.t / 60));
-    return 'Canal: ' + last.v.toFixed(0) + ' cm' + (d >= 15 ? ' · sube rápido' : '') + (age > 35 ? ' · sin señal' : '');
-  } catch (e) { return ''; }
+async function fetchEnsemble(p) {
+  const u = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
+  u.searchParams.set('latitude', p.lat);
+  u.searchParams.set('longitude', p.lon);
+  u.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
+  u.searchParams.set('models', 'ecmwf_ifs025');
+  u.searchParams.set('forecast_hours', '4');
+  u.searchParams.set('timezone', 'auto');
+  u.searchParams.set('wind_speed_unit', 'kmh');
+  const r = await fetch(u.toString(), { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (!j.hourly) throw new Error('sin ensemble');
+  return j.hourly;
 }
 
 /* ===================== Carga ===================== */
@@ -233,14 +290,22 @@ async function refresh() {
   if (S.busy) return;
   S.busy = true;
   paint();
-  const results = await Promise.allSettled(S.places.map(p => fetchPlace(p)));
+  const results = await Promise.allSettled(S.places.map(async p => {
+    const [det, ens] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p)]);
+    if (det.status !== 'fulfilled') throw det.reason;
+    return {
+      det: det.value,
+      ens: ens.status === 'fulfilled' ? ensembleRisk(ens.value) : null
+    };
+  }));
+
   let ok = 0;
   S.places.forEach((p, i) => {
     const res = results[i];
     if (res.status === 'fulfilled') {
-      const agg = aggregate(res.value.hourly);
-      agg.times = res.value.hourly.time;
-      agg.current = res.value.current;
+      const agg = aggregate(res.value.det.hourly, res.value.ens);
+      agg.times = res.value.det.hourly.time;
+      agg.current = res.value.det.current;
       S.data[p.id] = agg;
       ok++;
       checkAlert(p, agg);
@@ -270,7 +335,7 @@ function notify(title, body) {
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.ready.then(reg => reg.showNotification(title, {
       body, icon: 'icon-192.png', badge: 'icon-192.png',
-      vibrate: [300, 100, 300], requireInteraction: true, tag: 'paraguas'
+      vibrate: [300, 100, 300], requireInteraction: true, tag: 'asn'
     })).catch(() => { });
   } catch (e) { }
 }
@@ -278,7 +343,7 @@ function notify(title, body) {
 async function askNotify() {
   if (typeof Notification === 'undefined') { toast('Este navegador no permite avisos'); return; }
   const perm = await Notification.requestPermission();
-  if (perm === 'granted') { notify('☂️ Avisos activados', 'Así te vamos a avisar.'); toast('Listo, avisos activados'); }
+  if (perm === 'granted') { notify('ASN 4.0 · avisos activados', 'Así te vamos a avisar.'); toast('Listo, avisos activados'); }
   else toast('Los avisos quedaron bloqueados');
   paint();
 }
@@ -293,7 +358,7 @@ function paint() {
   const sub = document.getElementById('sub');
   const view = document.getElementById('view');
   if (!S.places.length) {
-    sub.textContent = 'Tu pronóstico, sin vueltas';
+    sub.textContent = 'Alerta Super Niño 4.0';
     view.innerHTML = viewEmpty();
     return;
   }
@@ -310,9 +375,9 @@ function paint() {
 
 function viewEmpty() {
   return `<div class="empty">
-    <div class="big">☂️</div>
+    <div class="big">🛰️</div>
     <h2>¿Dónde querés que te avise?</h2>
-    <p>Casa, el colegio, el trabajo. Te digo si viene lluvia fuerte, ráfagas o granizo antes de que salgas.</p>
+    <p>Casa, el colegio, el trabajo. Te digo si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica antes de que salgas.</p>
     <button id="startAdd">Agregar un lugar</button>
     <p class="hint">Se guarda solo en este teléfono.</p>
   </div>`;
@@ -370,6 +435,7 @@ function heroHtml(p) {
     <details class="more">
       <summary>Ver detalles</summary>
       <div class="mrow">${d.models.map(x => `<span><i class="dot d${x.l}"></i>${MODEL_NAME[x.m]}</span>`).join('')}</div>
+      ${probHtml(d)}
       ${barsHtml(d)}
       <div class="links">
         <a href="https://www.rainviewer.com/map.html?loc=${p.lat},${p.lon},9" target="_blank" rel="noopener">🛰️ Ver radar</a>
@@ -380,6 +446,17 @@ function heroHtml(p) {
 
     ${ask}
   </section>`;
+}
+
+function probHtml(d) {
+  if (!d.ens) return '';
+  const pc = v => Math.round(v * 100) + '%';
+  const bits = [
+    'lluvia ≥15 mm <b>' + pc(d.ens.rain15) + '</b>',
+    'ráfagas ≥60 km/h <b>' + pc(d.ens.gust60) + '</b>'
+  ];
+  if (d.hailPossible) bits.push('<b>posible granizo</b>');
+  return `<div class="prob">${d.ens.n} escenarios: ${bits.join(' · ')}</div>`;
 }
 
 function barsHtml(d) {
@@ -422,7 +499,7 @@ function viewSettings() {
   const tot = {};
   done.forEach(f => Object.keys(f.pred).forEach(m => {
     const pr = f.pred[m];
-    let hit = f.a === 'no' ? (!pr.rain && !pr.wind && !pr.hail) : !!pr[f.a] || (f.a === 'rain' && pr.hail) || (f.a === 'hail' && pr.rain);
+    const hit = f.a === 'no' ? (!pr.rain && !pr.wind && !pr.hail) : !!pr[f.a] || (f.a === 'rain' && pr.hail) || (f.a === 'hail' && pr.rain);
     tot[m] = tot[m] || [0, 0];
     tot[m][1]++; if (hit) tot[m][0]++;
   }));
@@ -439,12 +516,8 @@ function viewSettings() {
   <div class="sec">Avisos</div>
   <div class="card">
     <h3>${perm === 'granted' ? 'Avisos activados' : 'Avisos en este teléfono'}</h3>
-    <p>${perm === 'granted'
-      ? 'Cuando el riesgo sube, te llega una notificación.'
-      : 'Activalos para enterarte sin abrir la app.'}</p>
-    <div style="margin-top:12px">
-      <button id="enableNotify">${perm === 'granted' ? 'Probar un aviso' : 'Activar avisos'}</button>
-    </div>
+    <p>${perm === 'granted' ? 'Cuando el riesgo sube, te llega una notificación.' : 'Activalos para enterarte sin abrir la app.'}</p>
+    <div style="margin-top:12px"><button id="enableNotify">${perm === 'granted' ? 'Probar un aviso' : 'Activar avisos'}</button></div>
     <p class="hint">Con la app cerrada los avisos llegan por <b>ntfy</b>: instalá esa app y suscribite al canal de abajo. Es gratis y sin cuenta.</p>
     <div style="display:flex;gap:8px;margin-top:10px">
       <input value="${esc(S.topic)}" readonly style="font-size:13px">
@@ -457,12 +530,72 @@ function viewSettings() {
     ${scoreRows || `<p>Cuando respondas “¿Está pasando?”, acá vas a ver qué modelo le pega más en tu zona.</p>`}
   </div>
 
+  <div class="sec">ASN 4.0</div>
+  <div class="card">
+    <p>Monitor de inteligencia: 51 escenarios del modelo europeo, cuatro modelos de control y tus reportes.</p>
+    <div style="margin-top:12px"><button class="ghost" id="reopenIntro">Ver el tutorial otra vez</button></div>
+  </div>
+
   <div class="sec">Datos</div>
   <div class="card">
     <p>Los lugares y tus respuestas quedan en este teléfono.</p>
     <div style="margin-top:12px"><button class="ghost" id="wipe">Borrar todo</button></div>
   </div>
   <div style="margin-top:18px"><button class="ghost" id="back" style="width:100%">← Volver</button></div>`;
+}
+
+/* ===================== Tutorial / simulador ===================== */
+const DEMO_WIND = { leve: 1, moderado: 2, fuerte: 3 };
+const DEMO_PHEN = {
+  lluvia: { t2: 'Se viene lluvia', t3: 'Peligro: lluvia fuerte', e: '🌧️', bump: 0 },
+  tormenta: { t2: 'Se viene tormenta', t3: 'Peligro: tormenta fuerte', e: '⛈️', bump: 0 },
+  granizo: { t2: 'Puede caer granizo', t3: 'Peligro: granizo', e: '🧊', bump: 1 },
+  nieve: { t2: 'Puede caer nieve', t3: 'Peligro: nieve', e: '❄️', bump: 0 },
+  electrico: { t2: 'Tormenta eléctrica', t3: 'Peligro: tormenta eléctrica', e: '⚡', bump: 1 },
+  rayos: { t2: 'Rayos cerca', t3: 'Peligro: rayos frecuentes', e: '🌩️', bump: 1 },
+  'electrico-total': { t2: 'Tormenta eléctrica severa', t3: 'Peligro: tormenta severa', e: '🌪️', bump: 1 }
+};
+const demo = { wind: 'moderado', phen: 'lluvia' };
+
+function openSheet() {
+  const el = document.getElementById('sheet');
+  if (!el) return;
+  el.hidden = false;
+  renderDemo();
+}
+function closeSheet() {
+  const el = document.getElementById('sheet');
+  if (!el) return;
+  el.hidden = true;
+  try { localStorage.setItem(INTRO_KEY, '1'); } catch (e) { }
+}
+
+function renderDemo() {
+  const box = document.getElementById('demoPrev');
+  if (!box) return;
+  const base = DEMO_WIND[demo.wind];
+  const ph = DEMO_PHEN[demo.phen];
+  const lvl = Math.min(3, base + ph.bump);
+  const title = lvl >= 3 ? ph.t3 : lvl === 2 ? ph.t2 : lvl === 1 ? 'Ojo con el cielo' : 'Todo tranquilo';
+  const emoji = lvl <= 1 ? (lvl === 0 ? '😌' : '🌤️') : ph.e;
+  const line = lvl >= 2 ? 'Varios escenarios coinciden para las próximas 3 horas.'
+    : lvl === 1 ? 'Puede caer algo leve en las próximas 3 horas.'
+      : 'No se espera nada raro en las próximas 3 horas.';
+  const action = lvl >= 3 ? 'Quedate adentro. Evitá salir en auto si no hace falta.'
+    : lvl === 2 ? 'Guardá lo que tengas afuera y cerrá las ventanas.'
+      : lvl === 1 ? 'Si salís, llevá paraguas por las dudas.'
+        : 'Buen momento para estar afuera.';
+  const cta = ['✅', '☂️', '⚠️', '🚨'][lvl];
+
+  box.innerHTML = `<section class="hero lv${lvl}">
+    <div class="where"><span>📍 <b>Así se vería</b></span><span>ejemplo</span></div>
+    <div class="main"><div class="emoji">${emoji}</div>
+      <div><div class="title">${title}</div><div class="line">${line}</div></div></div>
+    <div class="action"><span class="cta">${cta}</span><span>${action}</span></div>
+  </section>`;
+
+  document.querySelectorAll('#segWind button').forEach(b => b.classList.toggle('on', b.dataset.wind === demo.wind));
+  document.querySelectorAll('#phenList button').forEach(b => b.classList.toggle('on', b.dataset.phen === demo.phen));
 }
 
 /* ===================== Buscar lugares ===================== */
@@ -515,8 +648,14 @@ function useGPS() {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#copyTopic');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-close],[data-wind],[data-phen],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#copyTopic,#reopenIntro,#startBtn');
   if (!t) return;
+
+  if (t.hasAttribute('data-close')) { closeSheet(); return; }
+  if (t.id === 'startBtn') { closeSheet(); return; }
+  if (t.hasAttribute('data-wind')) { demo.wind = t.getAttribute('data-wind'); renderDemo(); return; }
+  if (t.hasAttribute('data-phen')) { demo.phen = t.getAttribute('data-phen'); renderDemo(); return; }
+  if (t.id === 'reopenIntro') { openSheet(); return; }
 
   if (t.id === 'refresh') { refresh(); toast('Actualizando…'); return; }
   if (t.id === 'gear') { S.view = S.view === 'settings' ? 'home' : 'settings'; paint(); return; }
@@ -554,7 +693,7 @@ document.addEventListener('click', ev => {
     const d = S.data[id];
     if (p && d) {
       const pred = {};
-      d.models.forEach(m => { pred[m.m] = { rain: m.rain, wind: m.wind, hail: m.hail }; });
+      d.models.forEach(m => { pred[m.m] = { rain: m.rain, wind: m.wind, hail: false }; });
       S.feedback.push({ p: p.name, t: Date.now(), a: t.getAttribute('data-ans'), pred });
       S.feedback = S.feedback.slice(-200);
       save();
@@ -600,6 +739,10 @@ function init() {
   });
   setInterval(() => { if (!document.hidden && S.places.length) refresh(); }, 5 * 60000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
+
+  let seen = false;
+  try { seen = !!localStorage.getItem(INTRO_KEY); } catch (e) { }
+  if (!seen) setTimeout(openSheet, 2500);
 }
 
 document.addEventListener('DOMContentLoaded', init);
