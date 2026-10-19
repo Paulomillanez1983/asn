@@ -18,23 +18,28 @@
   .top img{width:40px;height:40px;border-radius:12px}
   .top b{font-size:17px}
   .top span{display:block;font-size:12px;color:var(--dim)}
-  h1{font-size:25px;line-height:1.25;letter-spacing:-.2px}
-  .sub{color:var(--dim);font-size:14px;line-height:1.6;margin-top:10px}
+  h1{font-size:27px;line-height:1.2;letter-spacing:-.3px}
+  .sub{color:#c6d4ec;font-size:14.5px;line-height:1.65;margin-top:12px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px;margin-top:16px}
-  .card h2{font-size:15px;margin-bottom:8px}
+  .card h2{font-size:15.5px;margin-bottom:10px}
   .card p{font-size:13.5px;color:#c6d4ec;line-height:1.6}
+  .item{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+  .item:last-child{border-bottom:0;padding-bottom:0}
+  .item .ic{font-size:18px;flex:none;width:24px;text-align:center}
+  .item b{display:block;font-size:13.5px}
+  .item span{display:block;font-size:12.5px;color:#9fb2d1;line-height:1.5;margin-top:2px}
+  .amounts{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+  .amounts span{border:1px solid var(--line);background:#152238;color:#dbe7ff;
+    font-size:13px;font-weight:600;padding:8px 12px;border-radius:999px}
   .btn{display:block;text-align:center;text-decoration:none;font-weight:700;font-size:15px;
     padding:15px;border-radius:14px;margin-top:12px}
   .btn.mp{background:linear-gradient(150deg,#0ea5e9,#2563eb);color:#fff}
   .btn.gh{background:#1f2b3f;color:#eaf2ff;border:1px solid var(--line)}
   .btn.off{background:#182233;color:#7d90b3;pointer-events:none}
   .note{font-size:12px;color:#7d90b3;margin-top:10px;line-height:1.5}
-  table{width:100%;border-collapse:collapse;margin-top:6px}
-  td{font-size:13px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);color:#c6d4ec}
-  td:last-child{text-align:right;color:#dbe7ff;white-space:nowrap}
-  tr:last-child td{border-bottom:0}
   .back{display:inline-block;margin-top:22px;color:var(--dim);font-size:13px;text-decoration:none}
   .warn{margin-top:14px;font-size:12px;color:#8fa3c4;line-height:1.55}
+  .quote{border-left:3px solid #2563eb;padding-left:12px;font-size:14px;color:#dbe7ff;line-height:1.6;margin-top:4px}
 </style>
 </head>
 <body>
@@ -45,25 +50,35 @@
   </div>
 
   <h1>Apoyar el proyecto</h1>
-  <p class="sub">ASN nació para que tu familia se entere antes: lluvia fuerte, ráfagas, granizo, nieve y crecidas.
-    Es gratis y va a seguir siéndolo. Si querés ayudar a mantenerlo, acá están las formas.</p>
+  <p class="sub">ASN es gratis y va a seguir siéndolo. Pero mantenerlo vivo, mejorarlo y que llegue a más familias
+    lleva tiempo, infraestructura y trabajo. Si podés y querés, tu aporte lo hace posible.</p>
 
   <div class="card">
-    <h2>Qué se financia</h2>
-    <table>
-      <tr><td>Hosting y base de datos</td><td>$0 (Cloudflare free)</td></tr>
-      <tr><td>Datos de clima, radar y ríos</td><td>$0 (APIs abiertas)</td></tr>
-      <tr><td>Tiempo de mantenimiento</td><td>Tu aporte</td></tr>
-      <tr><td>Dominio propio (futuro)</td><td>Tu aporte</td></tr>
-    </table>
+    <h2>En qué se usa tu aporte</h2>
+    <div class="item"><div class="ic">🛠️</div><div><b>Mantenimiento</b><span>Que las alertas lleguen todos los días, sin fallas y sin sorpresas.</span></div></div>
+    <div class="item"><div class="ic">🌐</div><div><b>Dominio propio</b><span>Una dirección simple y estable para compartir con la familia.</span></div></div>
+    <div class="item"><div class="ic">📈</div><div><b>Crecimiento</b><span>Más localidades, más ríos, más cuencas y más puntos de monitoreo.</span></div></div>
+    <div class="item"><div class="ic">✨</div><div><b>Perfeccionamiento</b><span>Mejores modelos, radar, voz y una experiencia cada vez más clara.</span></div></div>
+    <div class="item"><div class="ic">🔐</div><div><b>Infraestructura y respaldos</b><span>Servidores, pruebas y copias para que nada se pierda.</span></div></div>
   </div>
 
   <div class="card">
-    <h2>Colaborar</h2>
+    <h2>Doná desde el monto que quieras</h2>
+    <p>No hay mínimos, planes ni suscripciones. Lo que puedas: cada aporte suma y va entero al proyecto.</p>
+    <div class="amounts"><span>$500</span><span>$1.000</span><span>$3.000</span><span>otro monto</span></div>
+    <p class="note">Los montos son solo una referencia: el link de pago acepta el importe que vos elijas.</p>
     <!-- Cuando tengas el link de Mercado Pago, reemplazá el href y quitá la clase "off" -->
     <a class="btn mp off" href="#" aria-disabled="true">Mercado Pago · próximamente</a>
     <a class="btn gh" href="https://github.com/sponsors/Paulomillanez1983" target="_blank" rel="noopener">GitHub Sponsors</a>
     <p class="note">Los pagos se hacen en la página del proveedor. ASN nunca recibe ni guarda datos de tarjetas.</p>
+  </div>
+
+  <div class="card">
+    <h2>La seguridad la hacemos entre todos</h2>
+    <p class="quote">Cada persona que instala ASN, la comparte con su familia y reporta lo que ve,
+      mejora el sistema para los demás. Tu aporte es otra forma de cuidar a otros.</p>
+    <p class="note" style="margin-top:12px">Un sistema moderno, personalizado para cada zona y en manos de la comunidad
+      que lo usa.</p>
   </div>
 
   <div class="card">
