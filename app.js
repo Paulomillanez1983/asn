@@ -456,7 +456,7 @@ function probHtml(d) {
     'ráfagas ≥60 km/h <b>' + pc(d.ens.gust60) + '</b>'
   ];
   if (d.hailPossible) bits.push('<b>posible granizo</b>');
-  return `<div class="prob">${d.ens.n} escenarios: ${bits.join(' · ')}</div>`;
+  return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}</div>`;
 }
 
 function barsHtml(d) {
