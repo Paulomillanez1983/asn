@@ -307,12 +307,12 @@ function cardHtml(p) {
 
 function barsHtml(d) {
   const n = Math.min(12, d.times.length);
-  let out = '<div class="bars">', meta = '<div class="barmeta">';
+  let out = '<div class="barlabel">Probabilidad de lluvia · próximas 12 h</div><div class="bars">', meta = '<div class="barmeta">';
   for (let i = 0; i < n; i++) {
     const vals = d.models.map(m => m.hours[i] ? m.hours[i].prob : null).filter(v => v !== null);
     const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
     const rain = d.models.some(m => m.hours[i] && m.hours[i].p >= 0.2);
-    const h = Math.max(4, Math.round(avg));
+    const h = Math.max(8, Math.round(avg));
     out += `<div class="bar${rain ? ' s' : ''}" style="height:${h}%" title="${hourLabel(d.times[i])} · ${Math.round(avg)}%"></div>`;
     meta += `<div>${i % 2 === 0 ? hourLabel(d.times[i]).slice(0, 2) : ''}</div>`;
   }

@@ -1,4 +1,4 @@
-const CACHE = 'alerta-meteo-v4';
+﻿const CACHE = 'alerta-meteo-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -55,3 +55,4 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
