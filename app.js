@@ -361,10 +361,15 @@ function geoRank(r) {
 
 function geoDedupe(list) {
   const out = [];
+  const seen = new Set();
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
   list.sort((a, b) => geoRank(a) - geoRank(b));
   for (const r of list) {
-    const dup = out.some(x => Math.abs(x.lat - r.lat) < 0.0006 && Math.abs(x.lon - r.lon) < 0.0006);
-    if (!dup) out.push(r);
+    const key = norm(r.label) + '|' + norm(r.sub);
+    const near = out.some(x => Math.abs(x.lat - r.lat) < 0.0006 && Math.abs(x.lon - r.lon) < 0.0006);
+    if (near || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
   }
   return out;
 }
@@ -458,13 +463,27 @@ let deferredPrompt = null;
 
 async function installApp() {
   if (deferredPrompt) {
-    deferredPrompt.prompt();
-    try {
-      const c = await deferredPrompt.userChoice;
-      toast(c.outcome === 'accepted' ? 'Instalando…' : 'Cancelaste la instalación');
-    } catch (e) { }
+    const p = deferredPrompt;
     deferredPrompt = null;
     S.canInstall = false;
+    try {
+      p.prompt(); // debe llamarse dentro del gesto del usuario
+      const choice = await Promise.race([
+        p.userChoice,
+        new Promise(resolve => setTimeout(() => resolve(null), 1500))
+      ]);
+      if (!choice) {
+        // el navegador no mostró el diálogo: mostramos los pasos
+        S.view = 'install';
+        paint();
+        return;
+      }
+      toast(choice.outcome === 'accepted' ? 'Instalando…' : 'Cancelaste la instalación');
+    } catch (e) {
+      S.view = 'install';
+      paint();
+      return;
+    }
     paint();
     return;
   }
@@ -847,7 +866,12 @@ function renderResults() {
       ? '<p class="hint">Sin resultados. Probá con “calle y número, ciudad”.</p>' : '';
     return;
   }
-  box.innerHTML = S.results.map((r, i) => `<div class="res" data-pick="${i}">
+  const askedNumber = /\d{1,5}\s*$/.test(S.query.trim());
+  const hasExact = S.results.some(r => r.kind === 'Dirección');
+  const note = (askedNumber && !hasExact)
+    ? '<p class="hint">Esa altura no está cargada en el mapa. Elegí la calle: la tomamos como referencia del barrio.</p>'
+    : '';
+  box.innerHTML = note + S.results.map((r, i) => `<div class="res" data-pick="${i}">
       <span><b style="font-weight:600">${esc(r.label)}</b><small>${esc(r.sub || '')}</small></span>
       <span class="add">${esc(r.kind)}</span>
     </div>`).join('');
