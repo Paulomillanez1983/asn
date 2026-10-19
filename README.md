@@ -26,6 +26,16 @@ El nivel que ves en la tarjeta es **el que alcanzan al menos 2 de los 4 modelos*
 
 Además de la tarjeta, cada lugar tiene accesos directos al **radar** (RainViewer) y a los **rayos** (Blitzortung) para confirmar en el momento.
 
+## Observación en tiempo real
+
+Arriba de las tarjetas aparece lo que **está pasando ahora** según el METAR del aeropuerto de Córdoba (SACO), que se emite cada 30–60 minutos:
+
+- temperatura, viento y ráfagas en km/h,
+- fenómenos presentes (lluvia, tormenta, granizo),
+- hora del reporte; el nombre del reporte crudo aparece al mantener presionado.
+
+Fuente: [NOAA Aviation Weather](https://aviationweather.gov/api/data/metar?ids=SACO&format=json) — pública, sin clave. Sirve de contraste: si el pronóstico dice "sin riesgo" y el aeropuerto reporta tormenta, mandan los datos observados.
+
 ## Avisos
 
 - **Con la app abierta o en segundo plano:** notificación del navegador cuando el nivel sube a 2 o 3.
@@ -71,6 +81,10 @@ Abrí `http://localhost:8080`.
 ## Privacidad
 
 El repositorio no contiene direcciones, teléfonos ni coordenadas. Los lugares se cargan desde el celular y quedan en `localStorage`. El canal de ntfy es el único dato compartido, y solo se usa para publicar avisos.
+
+## Nota de investigación: God's Eye View
+
+Se evaluó el proyecto [God's Eye View](https://github.com/bilawalsidhu/gods-eye-view) ("Ojos de Dios"), un globo 3D de código abierto que fusiona datos públicos. Sus capas meteorológicas —radar MRMS de NOAA nowCOAST, densidad de rayos, avisos de ciclones— **solo cubren Estados Unidos**, y el visor 3D no aporta nada a una alerta familiar. Se descartó como dependencia, pero se tomó su idea central: **sumar observación real**, que es lo que aporta la tira de METAR.
 
 ## Límites
 

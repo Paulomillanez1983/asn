@@ -14,7 +14,8 @@ const DEFAULT_TOPIC = 'alertameteo-cba-7q4m9k2x';
 
 const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
-  data: {}, updated: 0, busy: false, view: 'home', installEvt: null, q: '', results: []
+  data: {}, updated: 0, busy: false, view: 'home', installEvt: null, q: '', results: [],
+  obs: null
 };
 
 /* ============ Storage ============ */
@@ -142,12 +143,52 @@ async function fetchCanal(topic) {
   } catch (e) { return 'Canal: sin conexión'; }
 }
 
+/* Observación real: METAR del aeropuerto de Córdoba (NOAA, sin clave) */
+async function fetchObs() {
+  const r = await fetch('https://aviationweather.gov/api/data/metar?ids=SACO&format=json&hours=1', { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (!Array.isArray(j) || !j.length) throw new Error('sin METAR');
+  return j[0];
+}
+
+function obsHtml() {
+  const o = S.obs;
+  if (!o) return '';
+  const raw = o.rawOb || '';
+  const tokens = raw.split(/\s+/);
+  const has = k => tokens.some(t => t.includes(k));
+  const phen = [];
+  if (has('TS')) phen.push('tormenta');
+  if (has('GR')) phen.push('granizo');
+  if (has('RA') || has('DZ') || has('SH')) phen.push('lluvia');
+
+  const gustM = raw.match(/(\d{3}|VRB)(\d{2})G(\d{2})KT/);
+  const windKmh = o.wspd != null ? Math.round(o.wspd * 1.852) : null;
+  const gustKmh = gustM ? Math.round(Number(gustM[3]) * 1.852) : null;
+  const worst = Math.max(gustKmh || 0, windKmh || 0);
+  const cls = (phen.includes('tormenta') || phen.includes('granizo')) ? ' bad' : (worst >= 50 || phen.length ? ' warn' : '');
+  const temp = o.temp != null ? o.temp + ' °C' : '—';
+  const time = o.reportTime ? o.reportTime.slice(11, 16) : '';
+
+  return `<div class="obs${cls}" title="${esc(raw)}">
+    <span>🛬 <b>Ahora en Córdoba</b> · ${temp}</span>
+    ${windKmh != null ? `<span class="tag">viento ${windKmh} km/h${gustKmh ? ' · ráfagas ' + gustKmh : ''}</span>` : ''}
+    <span class="tag">${phen.length ? phen.join(', ') : 'sin lluvia'}</span>
+    ${time ? `<span class="tag">${time} hs</span>` : ''}
+  </div>`;
+}
+
 /* ============ Carga ============ */
 async function refresh() {
   if (S.busy) return;
   S.busy = true;
   render();
-  const results = await Promise.allSettled(S.places.map(p => fetchPlace(p)));
+  const [obs, results] = await Promise.all([
+    fetchObs().catch(() => null),
+    Promise.allSettled(S.places.map(p => fetchPlace(p)))
+  ]);
+  if (obs) S.obs = obs;
   let ok = 0;
   S.places.forEach((p, i) => {
     const res = results[i];
@@ -222,7 +263,7 @@ function viewEmpty() {
 function viewHome() {
   const cards = S.places.map(p => cardHtml(p)).join('');
   const q = pendingQuestion();
-  return (q ? q : '') + cards + tipsHtml();
+  return obsHtml() + (q ? q : '') + cards + tipsHtml();
 }
 
 function pendingQuestion() {

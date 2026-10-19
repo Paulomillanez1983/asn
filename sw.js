@@ -1,4 +1,4 @@
-const CACHE = 'alerta-meteo-v2';
+const CACHE = 'alerta-meteo-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -33,11 +33,15 @@ self.addEventListener('fetch', e => {
   }
 
   if (sameOrigin) {
+    // stale-while-revalidate: responde rápido y actualiza en segundo plano
     e.respondWith(
-      caches.match(req).then(hit => hit || fetch(req).then(r => {
-        if (r.ok) caches.open(CACHE).then(c => c.put(req, r.clone()));
-        return r;
-      }).catch(() => hit))
+      caches.match(req).then(hit => {
+        const net = fetch(req).then(r => {
+          if (r.ok) caches.open(CACHE).then(c => c.put(req, r.clone()));
+          return r;
+        }).catch(() => hit);
+        return hit || net;
+      })
     );
   }
 });
