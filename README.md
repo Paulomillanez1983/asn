@@ -44,11 +44,27 @@ Además se calculan los cuatro modelos determinísticos (ECMWF, GFS, ICON, GEM) 
 
 **Por qué no se usa `weather_code >= 96` para granizo:** esos códigos sólo se emiten en Europa Central; en Argentina nunca aparecen. Era código muerto. Ver [docs/INVESTIGACION.md](docs/INVESTIGACION.md).
 
+## Fuentes y redundancia
+
+| Dato | Fuente | Rol |
+|---|---|---|
+| Pronóstico | Open-Meteo (ECMWF, GFS, ICON, GEM) + ensemble IFS 51 | Principal |
+| Pronóstico | **MET Norway** (`api.met.no`) | Control externo independiente y respaldo si Open-Meteo falla |
+| Direcciones | OpenStreetMap (Photon + Nominatim) + Open-Meteo Geocoding | Búsqueda |
+| Radar | RainViewer | GIF si hay eco |
+| Grilla de lluvia | Open-Meteo (25 puntos alrededor del lugar) | GIF cuando no hay radar |
+
+Si Open-Meteo no responde, la tarjeta se arma con MET Norway y avisa "Datos de respaldo: MET Norway". En "Ver detalles" aparece la línea "Control externo MET Norway" con su nivel, lluvia acumulada y ráfagas; si difiere en dos niveles o más del principal, se marca la discrepancia.
+
+## GIF de radar o pronóstico
+
+Desde alerta naranja, el botón 🎞️ genera un GIF de 6 cuadros (3 s) con la zona: usa el radar de RainViewer si detecta eco; si no hay cobertura, dibuja el campo de lluvia del modelo en una grilla de 25 puntos y lo rotula "pronóstico", nunca "radar".
+
 ## Avisos
 
 - **App abierta o en segundo plano:** notificación del navegador **desde amarilla en adelante**, con el color y el fenómeno en el título: `🟡 Alerta amarilla · 💨 ráfagas en Casa`, `🔴 Alerta roja · 🧊 granizo en Colegio`, `🟠 Alerta naranja · 🌊 lluvia torrencial en Casa`. El mismo nivel no se repite antes de 3 h.
 - **Pregunta en pantalla:** a los 20 segundos de abrir, la app pregunta “¿Qué estás viendo en tu zona?” (máximo cada 6 h). Con esa respuesta cruza el reporte con el radar de RainViewer en vivo y guarda el resultado para la estadística de acierto por modelo.
-- **App cerrada:** **Web Push real** desde un Worker de Cloudflare (cron cada 10 minutos). No hay que instalar ntfy ni ninguna otra app: se activa con un toque desde ⚙️ Ajustes y se prueba con el botón **Probar**.
+- **App cerrada:** **Web Push real** desde un Worker de Cloudflare (cron cada 10 minutos). Se activa con un toque desde ⚙️ Ajustes y se prueba con **Probar**; no hay que instalar nada extra.
 - **Reglas de emisión:** mismo nivel no se repite antes de 3 h; el nivel baja sólo tras dos corridas por debajo; de 23 a 7 sólo pasan roja y morada.
 
 ## Infraestructura

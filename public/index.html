@@ -6,6 +6,25 @@
 <title>ASN 4.0 — Alerta Super Niño</title>
 <meta name="description" content="ASN 4.0, Alerta Super Niño: monitor de inteligencia que te avisa si viene lluvia fuerte, ráfagas, granizo, nieve o tormenta eléctrica.">
 <meta name="theme-color" content="#070d18">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ASN 4.0 — Alerta Super Niño">
+<meta property="og:locale" content="es_AR">
+<meta property="og:title" content="ASN 4.0 — El clima antes de que te agarre">
+<meta property="og:description" content="Avisos de lluvia, ráfagas, granizo, nieve y tormenta eléctrica en tus lugares, con cinco colores de alerta y avisos en tiempo real.">
+<meta property="og:url" content="https://asn.asn-clima.workers.dev/">
+<meta property="og:image" content="https://asn.asn-clima.workers.dev/og.png">
+<meta property="og:image:secure_url" content="https://asn.asn-clima.workers.dev/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ASN 4.0, alerta del clima con escala de cinco colores">
+<link rel="image_src" href="https://asn.asn-clima.workers.dev/og.png">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ASN 4.0 — El clima antes de que te agarre">
+<meta name="twitter:description" content="Avisos de lluvia, ráfagas, granizo, nieve y tormenta eléctrica en tus lugares.">
+<meta name="twitter:image" content="https://asn.asn-clima.workers.dev/og.png">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -105,6 +124,10 @@ a{color:#93c5fd;text-decoration:none}
 .hero .where{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
 .hero .where b{color:#e8f0ff;font-weight:650;letter-spacing:.1px}
 .hero .chip3h{background:rgba(255,255,255,.06);padding:3px 9px;border-radius:999px;font-size:11px}
+.iconbtn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#dbe7ff;
+  min-width:42px;min-height:38px;display:inline-grid;place-items:center;
+  padding:8px 9px;border-radius:11px;font-size:15px;line-height:1;font-weight:500}
+.iconbtn:active{background:rgba(255,255,255,.16)}
 .hero .main{display:flex;gap:14px;align-items:center;margin:15px 0 6px;position:relative}
 .hero .emoji{font-size:48px;line-height:1;filter:drop-shadow(0 8px 18px rgba(0,0,0,.45));flex:none}
 .hero.lv2 .emoji,.hero.lv3 .emoji{animation:breathe 2.8s ease-in-out infinite}
@@ -220,10 +243,10 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 .skel.hero-sk{height:190px;margin-bottom:14px}
 
 /* hoja tutorial */
-.sheet-wrap{position:fixed;inset:0;z-index:70;display:flex;align-items:flex-end;justify-content:center}
+.sheet-wrap{position:fixed;inset:0;height:100dvh;z-index:70;display:flex;align-items:flex-end;justify-content:center}
 .sheet-wrap[hidden]{display:none}
 .sheet-backdrop{position:absolute;inset:0;background:rgba(3,7,14,.76);backdrop-filter:blur(4px)}
-.sheet{position:relative;width:100%;max-width:720px;max-height:91vh;overflow:auto;background:#0d1828;
+.sheet{position:relative;width:100%;max-width:720px;max-height:calc(100dvh - 10px);overflow:auto;background:#0d1828;
   border-radius:26px 26px 0 0;border:1px solid var(--line);padding:22px 18px calc(22px + var(--sab));
   animation:up .32s cubic-bezier(.2,.8,.3,1)}
 @keyframes up{from{transform:translateY(48px);opacity:.4}to{transform:none;opacity:1}}
@@ -245,7 +268,24 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 .phen button{background:#12203a;border:1px solid var(--line);color:#c7d5ee;font-size:12.5px;padding:9px 12px;border-radius:999px;font-weight:550}
 .phen button.on{background:#23406b;border-color:#3b6ba8;color:#fff}
 .demoPrev{margin-top:14px}
-.sheet .go{width:100%;margin-top:18px;padding:14px;font-size:15px}
+.sheet .go{width:100%;margin-top:18px;padding:14px;font-size:15px;
+  position:sticky;bottom:0;z-index:2;box-shadow:0 -14px 22px rgba(13,24,40,.92),0 0 0 8px #0d1828}
+.scale{margin-top:14px;background:#12203a;border:1px solid var(--line);border-radius:16px;padding:4px 14px}
+.srow{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.srow:last-child{border-bottom:0}
+.srow b{font-size:13.5px;display:block}
+.srow span{font-size:12px;color:#9fb2d1;line-height:1.4;display:block;margin-top:1px}
+.sdot{width:12px;height:12px;border-radius:50%;flex:none;box-shadow:0 0 0 3px rgba(255,255,255,.05)}
+.sdot.c0{background:#34d399}.sdot.c1{background:#fbbf24}.sdot.c2{background:#fb923c}.sdot.c3{background:#f87171}.sdot.c4{background:#c084fc}
+.voicebtn{width:100%;margin-top:12px;padding:12px;font-size:14px}
+.kinds{display:flex;flex-wrap:wrap;gap:7px}
+.kinds button{background:#12203a;border:1px solid var(--line);color:#c7d5ee;font-size:12.5px;padding:9px 12px;border-radius:999px;font-weight:550}
+.kinds button.on{background:#23406b;border-color:#3b6ba8;color:#fff}
+.addr{font-size:11.5px;color:#7d90b3;margin-top:5px;padding-left:1px}
+.gifbox{margin-top:12px;border-radius:18px;overflow:hidden;background:#0a1420;border:1px solid var(--line);
+  aspect-ratio:1/1;display:grid;place-items:center;position:relative}
+.gifbox img{width:100%;height:100%;object-fit:cover;display:block}
+.gifspin{color:#9fb2d1;font-size:13.5px;padding:20px;text-align:center;line-height:1.5}
 .askgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
 .askgrid button{background:#16243a;border:1px solid var(--line2);color:#e6efff;padding:15px 12px;font-size:14.5px;font-weight:600;border-radius:15px;text-align:left}
 .askgrid button:nth-child(5){grid-column:1/-1}
@@ -277,6 +317,15 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
     <button class="x" data-close aria-label="Cerrar">✕</button>
     <h2 id="sheetTitle">ASN 4.0</h2>
     <p class="lead">Alerta Super Niño 4.0 · monitor de inteligencia</p>
+
+    <div class="scale" aria-label="Escala de colores">
+      <div class="srow"><i class="sdot c0"></i><div><b>Verde · Sin alerta</b><span>No se espera nada raro.</span></div></div>
+      <div class="srow"><i class="sdot c1"></i><div><b>Amarilla · Atención</b><span>Puede pasar algo leve. No es grave.</span></div></div>
+      <div class="srow"><i class="sdot c2"></i><div><b>Naranja · Preparate</b><span>Lluvia, granizo o ráfagas: guardá lo de afuera.</span></div></div>
+      <div class="srow"><i class="sdot c3"></i><div><b>Roja · Quedate adentro</b><span>Evitá salir en auto.</span></div></div>
+      <div class="srow"><i class="sdot c4"></i><div><b>Morada · Excepcional</b><span>Fenómeno extremo: no salgas.</span></div></div>
+    </div>
+    <button class="ghost voicebtn" id="speakIntro">🔊 Escuchar la explicación</button>
 
     <details class="info">
       <summary>¿Por qué “monitor de inteligencia”?</summary>
@@ -331,7 +380,27 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
   </section>
 </div>
 
+<div class="sheet-wrap" id="gifSheet" hidden>
+  <div class="sheet-backdrop" data-closegif></div>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="gifTitle">
+    <button class="x" data-closegif aria-label="Cerrar">✕</button>
+    <h2 id="gifTitle">Radar animado</h2>
+    <p class="lead" id="gifPlace">—</p>
+    <div class="gifbox">
+      <div class="gifspin" id="gifSpin">Generando GIF…</div>
+      <img id="gifImg" alt="Radar animado de la zona" hidden>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button id="gifShare" style="flex:1" disabled>Compartir GIF</button>
+      <button class="ghost" id="gifSave" disabled>Descargar</button>
+    </div>
+    <p class="hint">6 cuadros, 3 segundos en loop. Usa radar si hay cobertura; si no, el campo de lluvia del modelo. Solo desde alerta naranja.</p>
+  </section>
+</div>
+
 <div class="toast" id="toast"></div>
+<script src="vendor/gifenc.js" defer></script>
+<script src="radar.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

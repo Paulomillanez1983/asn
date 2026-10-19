@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    width:1200px;height:630px;overflow:hidden;position:relative;
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;color:#f3f7ff;
+    background:
+      radial-gradient(700px 520px at 88% 0%, #1b3a63 0%, transparent 62%),
+      radial-gradient(600px 460px at 4% 100%, #0d3340 0%, transparent 60%),
+      linear-gradient(160deg,#0a1424,#070d18 70%);
+  }
+  .rings{position:absolute;right:-140px;top:-120px;width:760px;height:760px;border-radius:50%;
+    border:1px solid rgba(125,211,252,.12)}
+  .rings:before,.rings:after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(125,211,252,.10)}
+  .rings:before{inset:90px}.rings:after{inset:190px}
+  .wrap{position:relative;height:100%;display:flex;align-items:center;gap:64px;padding:64px 72px}
+  .icon{width:236px;height:236px;border-radius:54px;flex:none;
+    box-shadow:0 30px 70px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.10)}
+  .txt{flex:1;min-width:0}
+  .brand{display:flex;align-items:baseline;gap:18px}
+  h1{font-size:104px;font-weight:800;letter-spacing:-4px;line-height:.95}
+  .v{font-size:40px;font-weight:700;color:#7dd3fc;letter-spacing:-1px}
+  .sub{font-size:30px;color:#9fb2d1;margin-top:18px;letter-spacing:.3px}
+  .tag{font-size:38px;font-weight:600;margin-top:14px;letter-spacing:-.8px;
+    background:linear-gradient(90deg,#a7f3d0,#7dd3fc 60%,#c084fc);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .scale{display:flex;gap:26px;margin-top:34px}
+  .s{display:flex;align-items:center;gap:9px;font-size:19px;color:#c6d4ec}
+  .d{width:16px;height:16px;border-radius:50%;box-shadow:0 0 14px currentColor}
+  .c0{background:#34d399;color:#34d399}
+  .c1{background:#fbbf24;color:#fbbf24}
+  .c2{background:#fb923c;color:#fb923c}
+  .c3{background:#f87171;color:#f87171}
+  .c4{background:#c084fc;color:#c084fc}
+  .url{position:absolute;left:72px;bottom:46px;font-size:20px;color:#6f83a6;letter-spacing:.4px}
+  .pill{position:absolute;right:72px;bottom:40px;font-size:19px;color:#cfe0ff;
+    background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+    padding:10px 18px;border-radius:999px}
+</style>
+</head>
+<body>
+  <div class="rings"></div>
+  <div class="wrap">
+    <img class="icon" src="icon-512.png" alt="">
+    <div class="txt">
+      <div class="brand"><h1>ASN</h1><span class="v">4.0</span></div>
+      <div class="sub">Alerta Super Niño</div>
+      <div class="tag">El clima antes de que te agarre</div>
+      <div class="scale">
+        <span class="s"><i class="d c0"></i>Verde</span>
+        <span class="s"><i class="d c1"></i>Amarilla</span>
+        <span class="s"><i class="d c2"></i>Naranja</span>
+        <span class="s"><i class="d c3"></i>Roja</span>
+        <span class="s"><i class="d c4"></i>Morada</span>
+      </div>
+    </div>
+  </div>
+  <div class="url">asn.asn-clima.workers.dev</div>
+  <div class="pill">Avisos en tiempo real · sin instalar nada</div>
+</body>
+</html>

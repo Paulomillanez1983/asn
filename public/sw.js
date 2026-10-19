@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v10';
+﻿const CACHE = 'asn-v20';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -55,19 +55,38 @@ self.addEventListener('push', e => {
     vibrate: [300, 100, 300],
     requireInteraction: true,
     tag: d.tag || 'asn',
-    data: { url: d.url || './' }
+    data: { url: d.url || './', speech: d.speech || d.title || '' }
   }));
 });
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const data = e.notification.data || {};
+  const speech = data.speech || '';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      for (const c of list) { if ('focus' in c) return c.focus(); }
-      return self.clients.openWindow('./');
+      for (const c of list) {
+        if ('focus' in c) {
+          return c.focus().then(() => {
+            if (speech) c.postMessage({ type: 'speak', text: speech });
+          });
+        }
+      }
+      const url = './' + (speech ? '?speak=' + encodeURIComponent(speech.slice(0, 140)) : '');
+      return self.clients.openWindow(url);
     })
   );
 });
+
+
+
+
+
+
+
+
+
+
 
 
 

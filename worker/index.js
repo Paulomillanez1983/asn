@@ -1,14 +1,29 @@
-/**
+﻿/**
  * ASN 4.0 — Worker de Cloudflare
  * - Sirve la app estática (./public)
  * - Guarda suscripciones Web Push en KV
- * - Cron cada 10 min: calcula riesgo y envía push (sin ntfy)
+ * - Cron cada 10 min: calcula riesgo y envía push
  */
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/alerta/')) {
+      try {
+        return await sharePage(url, ctx);
+      } catch (e) {
+        return new Response('No pudimos generar la vista previa.', { status: 500 });
+      }
+    }
+    if (url.pathname === '/og.png' || url.pathname.startsWith('/og/')) {
+      const res = await env.ASSETS.fetch(request);
+      if (!res.ok) return res;
+      const h = new Headers(res.headers);
+      h.set('cache-control', 'public, max-age=31536000, immutable');
+      return new Response(res.body, { status: 200, headers: h });
+    }
+
     if (url.pathname.startsWith('/api/')) {
       try {
         return await api(request, env, url);
@@ -54,7 +69,8 @@ async function api(req, env, url) {
       sub: { endpoint: sub.endpoint, expirationTime: null, keys: sub.keys },
       places,
       last: (prev && prev.last) || {},
-      at: (prev && prev.at) || {}
+      at: (prev && prev.at) || {},
+      ph: (prev && prev.ph) || {}
     };
     await env.SUBS.put(key, JSON.stringify(rec));
     return json({ ok: true, id, places: places.length });
@@ -84,6 +100,131 @@ async function api(req, env, url) {
   }
 
   return json({ error: 'ruta desconocida' }, 404);
+}
+
+/* ---------------- Enlace compartible con OG ---------------- */
+const LEVEL_SLUG = ['verde', 'amarilla', 'naranja', 'roja', 'morada'];
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function decodeToken(t) {
+  try {
+    const pad = '='.repeat((4 - (t.length % 4)) % 4);
+    const bin = atob((t + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    const o = JSON.parse(new TextDecoder().decode(bytes));
+    if (!o || typeof o.lat !== 'number' || typeof o.lon !== 'number') return null;
+    return o;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function sharePage(url, ctx) {
+  const cache = caches.default;
+  const cached = await cache.match(url.href);
+  if (cached) return cached;
+
+  const token = url.pathname.slice('/alerta/'.length);
+  const place = decodeToken(token);
+  if (!place) return new Response('Enlace inválido', { status: 404 });
+
+  /* si el token trae el estado (links nuevos) responde al instante, sin API */
+  const fast = typeof place.l === 'number';
+
+  let level = fast ? Math.max(0, Math.min(4, place.l)) : 0;
+  let ph = fast
+    ? { word: place.p || 'sin alerta', emoji: place.e || '🟢' }
+    : { word: 'sin alerta', emoji: '🟢' };
+  let pct = 0;
+  let n = 0;
+
+  if (!fast) {
+    try {
+      const pb = probabilities(await Promise.race([
+        forecast(place),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500))
+      ]));
+      level = levelOf(pb);
+      ph = phenomenon(pb);
+      n = pb.n;
+      pct = Math.round(Math.max(
+        pb.rain15, pb.rain30, pb.rain60, pb.rain100,
+        pb.gust60, pb.gust80, pb.gust100, pb.gust130
+      ) * 100);
+    } catch (e) { }
+  }
+
+  const L = LEVELS[level];
+  const name = place.n || 'Mi lugar';
+  const title = level
+    ? `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${name}`
+    : `🟢 Sin alerta en ${name}`;
+  const desc = fast
+    ? `${place.a ? place.a + ' · ' : ''}${L.name}${place.p ? ' por ' + place.p : ''} al momento de compartir. Abrí ASN 4.0 para el detalle.`
+    : `${place.a ? place.a + ' · ' : ''}Próximas 3 h: ${pct}% de ${n} escenarios. Abrí ASN 4.0 para el detalle.`;
+  const img = `${url.origin}/og/${LEVEL_SLUG[level]}.png`;
+
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="ASN 4.0 — Alerta Super Niño">
+<meta property="og:locale" content="es_AR">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:url" content="${esc(url.href)}">
+<meta property="og:image" content="${esc(img)}">
+<meta property="og:image:secure_url" content="${esc(img)}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(title)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(desc)}">
+<meta name="twitter:image" content="${esc(img)}">
+<meta name="twitter:image:alt" content="${esc(title)}">
+<link rel="image_src" href="${esc(img)}">
+<meta name="theme-color" content="#070d18">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{min-height:100vh;display:grid;place-items:center;padding:24px;
+    font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#f3f7ff;
+    background:radial-gradient(900px 520px at 85% -10%,#16294a,transparent 60%),#070d18}
+  .box{max-width:520px;width:100%;border-radius:26px;padding:28px;
+    background:linear-gradient(165deg,#13202f,#0b1524);border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 24px 60px rgba(0,0,0,.55);text-align:center}
+  .emoji{font-size:64px;line-height:1}
+  h1{font-size:26px;margin:14px 0 6px;letter-spacing:-.5px}
+  .place{color:#9fb2d1;font-size:14px}
+  .pct{margin-top:16px;font-size:13px;color:#7d90b3}
+  .cta{display:inline-block;margin-top:22px;padding:14px 22px;border-radius:14px;
+    background:#2563eb;color:#fff;text-decoration:none;font-weight:650}
+  .foot{margin-top:14px;font-size:11px;color:#5d6f92}
+</style></head>
+<body><div class="box">
+  <div class="emoji">${L.emoji}${level ? '' : '😌'}</div>
+  <h1>${esc(level ? L.name : 'Sin alerta')}${level ? ': ' + esc(ph.word) : ''}</h1>
+  <div class="place">${esc(name)}${place.a ? ' · ' + esc(place.a) : ''}</div>
+  <div class="pct">${fast ? 'Estado al momento de compartir' : 'Próximas 3 horas · ' + pct + '% de ' + n + ' escenarios'}</div>
+  <a class="cta" href="/">Abrir ASN 4.0</a>
+  <div class="foot">Pronóstico por conjuntos del IFS · Open-Meteo</div>
+</div></body></html>`;
+
+  const res = new Response(html, {
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'public, max-age=60, s-maxage=300'
+    }
+  });
+  if (ctx) ctx.waitUntil(cache.put(url.href, res.clone()));
+  return res;
 }
 
 /* ---------------- Pronóstico ---------------- */
@@ -188,23 +329,32 @@ async function runAlerts(env) {
         const pb = probabilities(await forecast(p));
         const level = levelOf(pb);
         const prev = rec.last[tag] ?? -1;
+        const prevPh = (rec.ph && rec.ph[tag]) || '';
         const at = rec.at[tag] ?? 0;
-        const cooling = Date.now() - at < 3 * 60 * 60 * 1000;
+        const ph = phenomenon(pb);
         const quietBlock = quietNow() && level < 3;
 
-        if (level >= 1 && level > prev && !cooling && !quietBlock) {
-          const L = LEVELS[level];
-          const ph = phenomenon(pb);
-          const r = await sendPush(
-            env, rec.sub,
-            `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${tag}`,
-            `${ph.word} en las próximas 3 horas. Abrí ASN para ver el detalle.`,
-            tag
-          );
+        const changed = level !== prev || ph.word !== prevPh;
+        const repeatMin = Number(env.REPEAT_MIN || 30);
+        const repeatDue = level >= 1 && Date.now() - at >= repeatMin * 60 * 1000;
+        const recovered = prev >= 1 && level === 0;
+        const should = (level >= 1 && (changed || repeatDue)) || recovered;
+
+        if (should && !quietBlock) {
+          const r = recovered
+            ? await sendPush(env, rec.sub, `🟢 Sin alerta en ${tag}`, 'Bajó la alerta. Podés seguir con normalidad.', tag)
+            : await sendPush(
+              env, rec.sub,
+              `${LEVELS[level].emoji} ${LEVELS[level].name} · ${ph.emoji} ${ph.word} en ${tag}`,
+              `${ph.word} en las próximas 3 horas. Abrí ASN para ver el detalle.`,
+              tag
+            );
           if (r === 'gone') { gone = true; break; }
           if (r === 'ok') rec.at[tag] = Date.now();
         }
         rec.last[tag] = level;
+        rec.ph = rec.ph || {};
+        rec.ph[tag] = ph.word;
       } catch (e) {
         console.log('error', tag, e.message);
       }
@@ -214,3 +364,5 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
+

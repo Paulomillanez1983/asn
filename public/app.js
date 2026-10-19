@@ -1,11 +1,19 @@
 ﻿'use strict';
 
 /* ===================== Configuración ===================== */
+const KINDS = [
+  { id: 'casa', label: 'Casa', emoji: '🏠' },
+  { id: 'trabajo', label: 'Trabajo', emoji: '🏢' },
+  { id: 'familia', label: 'Familia', emoji: '👨‍👩‍👧' },
+  { id: 'escuela', label: 'Escuela', emoji: '🏫' },
+  { id: 'importante', label: 'Lugar importante', emoji: '⭐' }
+];
+const kindOf = p => KINDS.find(k => k.id === (p && p.kind)) || KINDS[4];
+
 const MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'gem_seamless'];
 const MODEL_NAME = { ecmwf_ifs025: 'ECMWF', gfs_seamless: 'GFS', icon_seamless: 'ICON', gem_seamless: 'GEM' };
 const KEY = 'asn.v1';
 const LEGACY = ['paraguas.v1', 'alerta-meteo.v2'];
-const DEFAULT_TOPIC = 'asn4-cba-7q4m9k2x';
 const INTRO_KEY = 'asn.intro';
 const CBA = { lat: -31.42, lon: -64.18 };
 
@@ -19,10 +27,11 @@ const LEVELS = [
 ];
 
 const S = {
-  places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
+  places: [], last: {}, feedback: [],
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
-  askPlace: null, radarResult: null, learn: {}, pushActive: false
+  askPlace: null, radarResult: null, learn: {}, pushActive: false,
+  voice: true, addKind: 'casa'
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -37,16 +46,23 @@ function load() {
       } catch (e) { }
     }
   }
-  S.places = Array.isArray(raw.places) ? raw.places : [];
+  S.places = (Array.isArray(raw.places) ? raw.places : []).map(p => ({
+    id: p.id || uid(),
+    label: p.label || p.name || 'Lugar',
+    addr: p.addr || '',
+    kind: p.kind || 'importante',
+    lat: p.lat,
+    lon: p.lon
+  }));
   S.feedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
   S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
-  S.topic = raw.topic || DEFAULT_TOPIC;
+  if (raw.voice === false) S.voice = false;
 }
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      places: S.places, topic: S.topic, last: S.last, feedback: S.feedback, learn: S.learn
+      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice
     }));
   } catch (e) { }
 }
@@ -54,6 +70,32 @@ function save() {
 /* ===================== Utilidades ===================== */
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+/* ===================== Voz ===================== */
+function pickVoice() {
+  try {
+    const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+    return vs.find(v => /es[-_]AR/i.test(v.lang)) || vs.find(v => /^es/i.test(v.lang)) || null;
+  } catch (e) { return null; }
+}
+
+function speak(text) {
+  try {
+    if (!('speechSynthesis' in window) || !S.voice || !text) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'es-AR';
+    u.rate = 1.02;
+    u.pitch = 1;
+    const v = pickVoice();
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch (e) { }
+}
+
+if ('speechSynthesis' in window) {
+  speechSynthesis.onvoiceschanged = () => { pickVoice(); };
+}
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -135,7 +177,7 @@ async function postSubscription(sub) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         subscription: sub.toJSON(),
-        places: S.places.map(p => ({ name: p.name, lat: p.lat, lon: p.lon }))
+        places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon }))
       })
     });
   } catch (e) { }
@@ -364,6 +406,7 @@ function hourSignal(d, i) {
 }
 
 function nextEvent(d) {
+  if (!d.times || !d.times.length) return null;
   const n = Math.min(12, d.times.length);
   for (let i = 0; i < n; i++) {
     if (d.snowHours && d.snowHours[i] >= 0.1) return { iso: d.times[i], label: 'Nieve' };
@@ -379,6 +422,7 @@ function nextEvent(d) {
 }
 
 function eventText(d) {
+  if (d.partial) return { txt: 'Datos de respaldo: MET Norway', big: false };
   const ev = nextEvent(d);
   if (!ev) return { txt: 'Sin lluvia ni ráfagas de más de 30 km/h en las próximas 12 horas', big: false };
   const mins = Math.round((new Date(ev.iso).getTime() - Date.now()) / 60000);
@@ -388,11 +432,13 @@ function eventText(d) {
 }
 
 function anyRain(d, hours) {
+  if (!d.times || !d.times.length) return false;
   const n = Math.min(hours, d.times.length);
   for (let i = 0; i < n; i++) if (hourSignal(d, i).rain) return true;
   return false;
 }
 function maxGust(d, hours) {
+  if (!d.times || !d.times.length) return 0;
   const n = Math.min(hours, d.times.length);
   let max = 0;
   for (let i = 0; i < n; i++) max = Math.max(max, hourSignal(d, i).gust);
@@ -415,6 +461,39 @@ async function fetchPlace(p) {
   const j = await r.json();
   if (!j.hourly || !j.hourly.time) throw new Error('sin datos');
   return { hourly: j.hourly, current: j.current };
+}
+
+/* Segunda fuente independiente: MET Norway (sin clave, CORS abierto) */
+async function fetchMetno(p) {
+  const u = 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=' +
+    encodeURIComponent(p.lat) + '&lon=' + encodeURIComponent(p.lon);
+  const r = await fetch(u, { cache: 'no-store' });
+  if (!r.ok) throw new Error('metno HTTP ' + r.status);
+  const j = await r.json();
+  const series = (j.properties && j.properties.timeseries) || [];
+  if (!series.length) throw new Error('metno sin datos');
+
+  const now = Date.now();
+  const next = series
+    .filter(s => new Date(s.time).getTime() >= now - 3600 * 1000)
+    .slice(0, 3);
+
+  let rain3 = 0, gustMs = 0, windMs = 0;
+  next.forEach(s => {
+    const det = s.data.instant.details || {};
+    const n1 = (s.data.next_1_hours && s.data.next_1_hours.details) || {};
+    rain3 += n1.precipitation_amount || 0;
+    gustMs = Math.max(gustMs, det.wind_speed_of_gust || det.wind_speed || 0);
+    windMs = Math.max(windMs, det.wind_speed || 0);
+  });
+
+  const gustKmh = Math.round(gustMs * 3.6);
+  let level = 0;
+  if (rain3 >= 60 || gustKmh >= 100) level = 3;
+  else if (rain3 >= 30 || gustKmh >= 80) level = 2;
+  else if (rain3 >= 15 || gustKmh >= 60) level = 1;
+
+  return { level, rain3: +rain3.toFixed(1), gustKmh, windKmh: Math.round(windMs * 3.6) };
 }
 
 async function fetchEnsemble(p) {
@@ -545,19 +624,32 @@ async function refresh() {
   S.busy = true;
   paint();
   const results = await Promise.allSettled(S.places.map(async p => {
-    const [det, ens] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p)]);
-    if (det.status !== 'fulfilled') throw det.reason;
-    return { det: det.value, ens: ens.status === 'fulfilled' ? ensembleRisk(ens.value) : null };
+    const [det, ens, met] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p), fetchMetno(p)]);
+    return {
+      det: det.status === 'fulfilled' ? det.value : null,
+      ens: ens.status === 'fulfilled' ? ensembleRisk(ens.value) : null,
+      met: met.status === 'fulfilled' ? met.value : null,
+      err: det.status !== 'fulfilled' ? det.reason : null
+    };
   }));
 
   let ok = 0;
   S.places.forEach((p, i) => {
     const res = results[i];
-    if (res.status === 'fulfilled') {
-      const agg = aggregate(res.value.det.hourly, res.value.ens);
-      agg.times = res.value.det.hourly.time;
-      agg.current = res.value.det.current;
+    const r = res.status === 'fulfilled' ? res.value : null;
+
+    if (r && r.det) {
+      const agg = aggregate(r.det.hourly, r.ens);
+      agg.times = r.det.hourly.time;
+      agg.current = r.det.current;
+      agg.met = r.met;
       applyLearning(p, agg);
+      S.data[p.id] = agg;
+      ok++;
+      checkAlert(p, agg);
+    } else if (r && r.met) {
+      /* Open-Meteo caído: seguimos con MET Norway como respaldo */
+      const agg = aggFromMet(r.met);
       S.data[p.id] = agg;
       ok++;
       checkAlert(p, agg);
@@ -572,24 +664,43 @@ async function refresh() {
   if (!ok && S.places.length) toast('No pudimos actualizar. Fijate la conexión.');
 }
 
+/* Tarjeta mínima cuando sólo responde MET Norway */
+function aggFromMet(met) {
+  return {
+    models: [], ens: null, level: met.level, detLevel: met.level, eLevel: null,
+    votes: { rain: met.rain3 >= 15 ? 1 : 0, wind: met.gustKmh >= 60 ? 1 : 0 },
+    rainRate: met.rain3 / 3, snow3: 0, snowHours: [], hailPossible: false, storm: false,
+    times: null, current: null, met, partial: true
+  };
+}
+
 function checkAlert(p, agg) {
   const prev = S.last[p.id];
   const prevLevel = typeof prev === 'number' ? prev : (prev && prev.level) || -1;
+  const prevPh = (prev && prev.ph) || '';
   const prevAt = (prev && typeof prev === 'object' && prev.at) || 0;
   const now = Date.now();
 
-  /* avisa desde amarilla (nivel 1), sin repetir el mismo nivel antes de 3 h */
-  if (agg.level >= 1 && agg.level > prevLevel && now - prevAt > 3 * 60 * 60 * 1000) {
+  const ph = phenomenon(agg);
+  const changed = agg.level !== prevLevel || ph.word !== prevPh;
+  const repeatDue = agg.level >= 1 && now - prevAt >= 30 * 60 * 1000;
+
+  /* avisa en cada cambio de nivel o fenómeno, y repite cada 30 min si sigue */
+  if (agg.level >= 1 && (changed || repeatDue)) {
     const L = LEVELS[agg.level];
-    const ph = phenomenon(agg);
     const info = levelInfo(agg);
     notify(
-      `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${p.name}`,
+      `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${p.label}`,
       info.action
     );
-    S.last[p.id] = { level: agg.level, at: now };
+    speak(`${L.name}. ${ph.word} en ${p.label}. ${info.action}`);
+    S.last[p.id] = { level: agg.level, at: now, ph: ph.word };
   } else {
-    S.last[p.id] = { level: agg.level, at: agg.level >= 1 ? prevAt : 0 };
+    S.last[p.id] = {
+      level: agg.level,
+      at: agg.level >= 1 ? prevAt : 0,
+      ph: ph.word
+    };
   }
 }
 
@@ -692,7 +803,8 @@ function viewEmpty() {
 }
 
 function viewHome() {
-  const ordered = [...S.places].sort((a, b) => (levelOf(b) - levelOf(a)) || a.name.localeCompare(b.name));
+  const ordered = [...S.places].sort((a, b) =>
+    (levelOf(b) - levelOf(a)) || String(a.label || '').localeCompare(String(b.label || '')));
   const loading = S.busy && !Object.keys(S.data).length;
   let body;
   if (loading) {
@@ -743,10 +855,14 @@ function notifyBanner() {
       <div class="bt"><b>Avisos bloqueados</b><span>Activalos desde el candado del navegador para este sitio.</span></div>
     </div>`;
   }
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const needsInstall = ios && !isStandalone();
   return `<div class="banner warn">
     <div class="bi">🔔</div>
-    <div class="bt"><b>Avisos en tiempo real</b><span>Te avisamos apenas sube el riesgo, aunque no estés mirando.</span></div>
-    <button id="enableNotify">Activar</button>
+    <div class="bt"><b>Avisos en tiempo real</b><span>${needsInstall
+      ? 'En iPhone primero agregala a inicio; después activás los avisos desde la app instalada.'
+      : 'Te avisamos cada vez que cambia el riesgo, aunque no estés mirando.'}</span></div>
+    <button id="${needsInstall ? 'installBtn' : 'enableNotify'}">${needsInstall ? 'Instalar' : 'Activar'}</button>
     <button class="x2" data-dismiss="notify" aria-label="Ocultar">✕</button>
   </div>`;
 }
@@ -755,13 +871,14 @@ function heroHtml(p) {
   const d = S.data[p.id];
   if (!d || d.error) {
     return `<section class="hero lv0" style="opacity:.9">
-      <div class="where"><span><b>${esc(p.name)}</b></span><span>${d && d.error ? 'sin datos' : 'cargando'}</span></div>
+      <div class="where"><span><b>${esc(p.label)}</b></span><span>${d && d.error ? 'sin datos' : 'cargando'}</span></div>
       <div class="main"><div class="emoji">⏳</div><div><div class="title">Un segundo…</div>
       <div class="line">${d && d.error ? 'No pudimos traer el pronóstico.' : 'Estamos mirando el cielo.'}</div></div></div>
     </section>`;
   }
   const info = levelInfo(d);
   const ev = eventText(d);
+  const k = kindOf(p);
   const c = d.current || {};
   const gNow = c.wind_gusts_10m != null ? Math.round(c.wind_gusts_10m) : null;
   const nowBits = [
@@ -777,7 +894,15 @@ function heroHtml(p) {
     : '';
 
   return `<section class="hero ${info.cls}${d.level >= 1 ? ' alert' : ''}">
-    <div class="where"><span>📍 <b>${esc(p.name)}</b></span><span class="chip3h">${esc(info.pill)}</span></div>
+    <div class="where">
+      <span>${k.emoji} <b>${esc(p.label)}</b></span>
+      <span style="display:flex;align-items:center;gap:7px">
+        <span class="chip3h">${esc(info.pill)}</span>
+        ${d.level >= 2 ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
+        <button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>
+      </span>
+    </div>
+    ${p.addr ? `<div class="addr">${esc(p.addr)}</div>` : ''}
 
     <div class="main">
       <div class="emoji">${info.emoji}</div>
@@ -800,6 +925,7 @@ function heroHtml(p) {
       <span style="font-size:11.5px;color:#7d90b3">${d.ens ? d.ens.n + ' escenarios' : ''}</span>
     </div>
 
+
     <details class="more">
       <summary>Ver detalles</summary>
       <div class="mrow">${d.models.map(x => `<span><i class="dot d${x.l}"></i>${MODEL_NAME[x.m]}</span>`).join('')}</div>
@@ -817,6 +943,7 @@ function heroHtml(p) {
 }
 
 function timelineHtml(d) {
+  if (!d.times || d.times.length < 2) return '';
   const n = Math.min(10, d.times.length);
   let out = '<div class="timeline">';
   for (let i = 0; i < n; i++) {
@@ -858,23 +985,34 @@ function tilesHtml(d) {
 }
 
 function probHtml(d) {
-  if (!d.ens) return '';
-  const pc = v => Math.round(v * 100) + '%';
-  const bits = [
-    'lluvia ≥15 mm <b>' + pc(d.ens.rain15) + '</b>',
-    'ráfagas ≥60 km/h <b>' + pc(d.ens.gust60) + '</b>'
-  ];
-  if (d.hailPossible) bits.push('<b>posible granizo</b>');
-  if (d.snow3 >= 0.2) bits.push('nieve <b>' + d.snow3.toFixed(1) + ' cm</b>');
-  const g12 = Math.round(maxGust(d, 12));
-  if (g12 >= 25) bits.push('ráfagas hasta <b>' + g12 + ' km/h</b>');
-  const bestLine = d.best
-    ? `<br>Fuente que más acierta acá: <b>${MODEL_NAME[d.best.src] || 'el ensemble'}</b> (${d.best.h}/${d.best.n})`
-    : '';
-  return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}${bestLine}</div>`;
+  const out = [];
+
+  if (d.ens) {
+    const pc = v => Math.round(v * 100) + '%';
+    const bits = [
+      'lluvia ≥15 mm <b>' + pc(d.ens.rain15) + '</b>',
+      'ráfagas ≥60 km/h <b>' + pc(d.ens.gust60) + '</b>'
+    ];
+    if (d.hailPossible) bits.push('<b>posible granizo</b>');
+    if (d.snow3 >= 0.2) bits.push('nieve <b>' + d.snow3.toFixed(1) + ' cm</b>');
+    const g12 = Math.round(maxGust(d, 12));
+    if (g12 >= 25) bits.push('ráfagas hasta <b>' + g12 + ' km/h</b>');
+    const bestLine = d.best
+      ? `<br>Fuente que más acierta acá: <b>${MODEL_NAME[d.best.src] || 'el ensemble'}</b> (${d.best.h}/${d.best.n})`
+      : '';
+    out.push(`<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}${bestLine}</div>`);
+  }
+
+  if (d.met) {
+    const gap = Math.abs(d.met.level - d.level);
+    out.push(`<div class="prob">Control externo <b>MET Norway</b>: nivel ${d.met.level} · lluvia ${d.met.rain3} mm · ráfagas ${d.met.gustKmh} km/h${gap >= 2 ? ' · <b>discrepa con Open-Meteo</b>' : ''}</div>`);
+  }
+
+  return out.join('');
 }
 
 function barsHtml(d) {
+  if (!d.times || d.times.length < 2) return '';
   const n = Math.min(12, d.times.length);
   let maxProb = 0;
   const values = [];
@@ -898,7 +1036,7 @@ function barsHtml(d) {
 function askHtml(p) {
   const opts = [['Sí, llueve', 'rain'], ['No, nada', 'no'], ['Cae granizo', 'hail'], ['Viento fuerte', 'wind']];
   return `<div class="ask">
-    <div class="q-t">¿Qué está pasando ahora en ${esc(p.name)}?</div>
+    <div class="q-t">¿Qué está pasando ahora en ${esc(p.label)}?</div>
     <div class="btns">${opts.map(([t, v]) => `<button data-ans="${v}" data-place="${p.id}">${t}</button>`).join('')}</div>
   </div>`;
 }
@@ -929,7 +1067,7 @@ function learnHtml() {
     Object.keys(S.learn[p.id] || {}).forEach(ph => {
       const b = bestSource(p.id, ph);
       if (!b) return;
-      rows.push(`<div class="row"><div class="grow"><b>${esc(p.name)} · ${names[ph] || ph}</b><small>${MODEL_NAME[b.src] || 'ensemble'} · ${b.h} de ${b.n}</small></div></div>`);
+      rows.push(`<div class="row"><div class="grow"><b>${esc(p.label)} · ${names[ph] || ph}</b><small>${MODEL_NAME[b.src] || 'ensemble'} · ${b.h} de ${b.n}</small></div></div>`);
     });
   });
   return rows.join('');
@@ -938,7 +1076,7 @@ function learnHtml() {
 function viewSettings() {
   const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
   const rows = S.places.map(p => `<div class="row">
-      <div class="grow"><b>${esc(p.name)}</b><small>${p.lat.toFixed(3)}, ${p.lon.toFixed(3)}</small></div>
+      <div class="grow"><b>${kindOf(p).emoji} ${esc(p.label)}</b><small>${esc(p.addr || (p.lat.toFixed(3) + ', ' + p.lon.toFixed(3)))}</small></div>
       <button class="del" data-del="${p.id}">Quitar</button>
     </div>`).join('') || `<p class="hint">Todavía no agregaste lugares.</p>`;
 
@@ -966,6 +1104,8 @@ function viewSettings() {
   <div class="card list">
     <div class="row"><div class="grow"><b>Instalar en el teléfono</b><small>${isStandalone() ? 'Ya instalada' : 'Pantalla completa y avisos'}</small></div>
       ${isStandalone() ? '<span style="color:#34d399;font-size:13px">✓</span>' : '<button class="ghost" id="installBtn" style="padding:8px 12px;font-size:13px">Instalar</button>'}</div>
+    <div class="row"><div class="grow"><b>Voz</b><small>Lee las alertas en voz alta</small></div>
+      <button class="ghost" id="toggleVoice" style="padding:8px 12px;font-size:13px">${S.voice ? 'Desactivar' : 'Activar'}</button></div>
     <div class="row"><div class="grow"><b>Avisos en tiempo real</b><small>${S.pushActive ? 'Activados en este dispositivo' : perm === 'denied' ? 'Bloqueados por el navegador' : 'Sin activar'}</small></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
         ${S.pushActive
@@ -974,7 +1114,9 @@ function viewSettings() {
       </div></div>
     <p class="hint">${S.pushActive
       ? 'Llegan aunque la app esté cerrada. No hace falta instalar nada más.'
-      : 'Se activan con un toque y funcionan con la app cerrada. Si el navegador ya bloqueó el permiso, abrilo desde el candado de la barra de direcciones.'}</p>
+      : (/iPhone|iPad|iPod/i.test(navigator.userAgent) && !isStandalone())
+        ? 'En iPhone los avisos solo funcionan con ASN instalada: Compartir → “Agregar a pantalla de inicio”, y activalos desde ahí.'
+        : 'Se activan con un toque y funcionan con la app cerrada. Si el navegador ya bloqueó el permiso, abrilo desde el candado de la barra de direcciones.'}</p>
   </div>
 
   <div class="sec">Qué fuente acierta más acá</div>
@@ -1020,6 +1162,14 @@ const DEMO_PHEN = {
   'electrico-total': { t2: 'Tormenta eléctrica severa', t3: 'Peligro: tormenta severa', e: '🌪️', bump: 1 }
 };
 const demo = { wind: 'moderado', phen: 'lluvia' };
+
+const INTRO_SCRIPT = 'ASN cuatro punto cero usa cinco colores. ' +
+  'Verde: no hay alerta, está todo tranquilo. ' +
+  'Amarilla: puede pasar algo, atención, no es grave. ' +
+  'Naranja: se viene lluvia, granizo o ráfagas fuertes. Guardá lo que tengas afuera. ' +
+  'Roja: quedate adentro y evitá salir en auto. ' +
+  'Morada: es un fenómeno excepcional, no salgas. ' +
+  'Cada aviso lleva el icono del fenómeno: lluvia, llovizna, lluvia torrencial, granizo, ráfagas, tormenta eléctrica o nieve.';
 
 function openSheet() {
   const el = document.getElementById('sheet');
@@ -1103,11 +1253,125 @@ async function onSearchInput(v) {
   }, 420);
 }
 
-function addPlace(p) {
+function b64url(obj) {
+  const s = JSON.stringify(obj);
+  const b = btoa(unescape(encodeURIComponent(s)));
+  return b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function sharePlace(id) {
+  const p = S.places.find(x => x.id === id);
+  if (!p) return;
+  const d0 = S.data[p.id];
+  const token = b64url({
+    n: p.label, a: p.addr, lat: p.lat, lon: p.lon,
+    l: d0 ? d0.level : 0,
+    p: d0 ? phenomenon(d0).word : '',
+    e: d0 ? phenomenon(d0).emoji : ''
+  });
+  const url = location.origin + '/alerta/' + token;
+  const d = S.data[id];
+  const text = d
+    ? `${LEVELS[d.level].name} · ${phenomenon(d).word} en ${p.label}`
+    : `ASN 4.0 · ${p.label}`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'ASN 4.0', text, url });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(url);
+    copied = true;
+  } catch (e) { }
+  toast(copied ? 'Enlace copiado para compartir' : 'Copiá este enlace: ' + url);
+}
+
+/* ===================== GIF de radar ===================== */
+let gifBlob = null;
+let gifUrl = null;
+let gifPlaceId = null;
+
+function openGif(id) {
+  const p = S.places.find(x => x.id === id);
+  const d = S.data[id];
+  if (!p || !d) return;
+  if (d.level < 2) { toast('El GIF se habilita desde alerta naranja'); return; }
+
+  gifPlaceId = id;
+  gifBlob = null;
+  document.getElementById('gifPlace').textContent = kindOf(p).emoji + ' ' + p.label;
+  const img = document.getElementById('gifImg');
+  img.hidden = true;
+  img.removeAttribute('src');
+  const spin = document.getElementById('gifSpin');
+  spin.hidden = false;
+  spin.textContent = 'Generando GIF…';
+  document.getElementById('gifShare').disabled = true;
+  document.getElementById('gifSave').disabled = true;
+  document.getElementById('gifSheet').hidden = false;
+  buildGif(p, d);
+}
+
+async function buildGif(p, d) {
+  const spin = document.getElementById('gifSpin');
+  try {
+    const blob = await ASNRadar.build(p, d.level, phenomenon(d).word);
+    gifBlob = blob;
+    if (gifUrl) URL.revokeObjectURL(gifUrl);
+    gifUrl = URL.createObjectURL(blob);
+    const img = document.getElementById('gifImg');
+    img.src = gifUrl;
+    img.hidden = false;
+    spin.hidden = true;
+    document.getElementById('gifShare').disabled = false;
+    document.getElementById('gifSave').disabled = false;
+  } catch (e) {
+    spin.textContent = 'No pudimos generar el GIF. Probá otra vez en un rato.';
+  }
+}
+
+async function shareGif() {
+  if (!gifBlob) return;
+  const p = S.places.find(x => x.id === gifPlaceId);
+  const d = S.data[gifPlaceId];
+  const file = new File([gifBlob], 'asn-radar.gif', { type: 'image/gif' });
+  const text = d ? `${LEVELS[d.level].name} · ${phenomenon(d).word} en ${p.label}` : 'ASN 4.0';
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'ASN 4.0', text });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  saveGif();
+}
+
+function saveGif() {
+  if (!gifUrl) return;
+  const a = document.createElement('a');
+  a.href = gifUrl;
+  a.download = 'asn-radar.gif';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast('GIF descargado');
+}
+
+function addPlace(r) {
   if (S.places.length >= 6) { toast('Máximo 6 lugares'); return; }
-  const dup = S.places.find(x => Math.abs(x.lat - p.lat) < 0.005 && Math.abs(x.lon - p.lon) < 0.005);
+  const dup = S.places.find(x => Math.abs(x.lat - r.lat) < 0.005 && Math.abs(x.lon - r.lon) < 0.005);
   if (dup) { toast('Ese lugar ya está en la lista'); return; }
-  S.places.push({ id: uid(), name: p.label || p.name, lat: +p.lat, lon: +p.lon });
+  const k = KINDS.find(x => x.id === S.addKind) || KINDS[0];
+  S.places.push({
+    id: uid(), label: k.label, kind: k.id,
+    addr: r.addr || [r.label, r.sub].filter(Boolean).join(', ') || r.name || '',
+    lat: +r.lat, lon: +r.lon
+  });
   S.results = []; S.query = ''; S.view = 'home';
   save(); paint(); refresh();
   syncPush();
@@ -1138,7 +1402,7 @@ function openAsk() {
   S.askPlace = p.id;
   const el = document.getElementById('askSheet');
   if (!el) return false;
-  document.getElementById('askPlace').textContent = '📍 ' + p.name;
+  document.getElementById('askPlace').textContent = kindOf(p).emoji + ' ' + p.label;
   const res = document.getElementById('askResult');
   if (res) { res.hidden = true; res.innerHTML = ''; }
   el.hidden = false;
@@ -1268,14 +1532,14 @@ function recordFeedback(p, a) {
       gust: m.hours.slice(0, 3).some(h => h.gust >= 40)
     };
   });
-  S.feedback.push({ p: p.name, t: Date.now(), a, pred, level: d.level, radar: null });
+  S.feedback.push({ p: p.label, t: Date.now(), a, pred, level: d.level, radar: null });
   S.feedback = S.feedback.slice(-200);
   save();
 }
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -1314,6 +1578,24 @@ document.addEventListener('click', ev => {
     paint();
     return;
   }
+  if (t.hasAttribute('data-share')) { sharePlace(t.getAttribute('data-share')); return; }
+  if (t.hasAttribute('data-gif')) { openGif(t.getAttribute('data-gif')); return; }
+  if (t.hasAttribute('data-closegif')) { document.getElementById('gifSheet').hidden = true; return; }
+  if (t.id === 'gifShare') { shareGif(); return; }
+  if (t.id === 'gifSave') { saveGif(); return; }
+  if (t.hasAttribute('data-kind')) {
+    S.addKind = t.getAttribute('data-kind');
+    document.querySelectorAll('#kinds button').forEach(b => b.classList.toggle('on', b.dataset.kind === S.addKind));
+    return;
+  }
+  if (t.id === 'speakIntro') { speak(INTRO_SCRIPT); return; }
+  if (t.id === 'toggleVoice') {
+    S.voice = !S.voice;
+    if (!S.voice && 'speechSynthesis' in window) speechSynthesis.cancel();
+    save(); paint();
+    toast(S.voice ? 'Voz activada' : 'Voz desactivada');
+    return;
+  }
   if (t.hasAttribute('data-close')) { closeSheet(); return; }
   if (t.id === 'startBtn') { closeSheet(); return; }
   if (t.hasAttribute('data-wind')) { demo.wind = t.getAttribute('data-wind'); renderDemo(); return; }
@@ -1340,10 +1622,6 @@ document.addEventListener('click', ev => {
   if (t.id === 'enableNotify') { askNotify(); return; }
   if (t.id === 'testPush') { testPush(); return; }
   if (t.id === 'disablePush') { disablePush(); return; }
-  if (t.id === 'copyTopic') {
-    navigator.clipboard.writeText(S.topic).then(() => toast('Canal copiado'), () => toast('No se pudo copiar'));
-    return;
-  }
   if (t.id === 'wipe') {
     if (confirm('¿Borrar tus lugares y respuestas de este teléfono?')) {
       localStorage.removeItem(KEY);
@@ -1385,7 +1663,11 @@ function openAdd() {
   document.getElementById('view').innerHTML = `
     <div class="sec">Agregar lugar</div>
     <div class="card">
-      <input id="q" placeholder="Calle y número, barrio o ciudad" autocomplete="off" autocapitalize="words">
+      <div class="lbl" style="margin-bottom:8px">¿Qué es este lugar?</div>
+      <div class="kinds" id="kinds">
+        ${KINDS.map(k => `<button data-kind="${k.id}" class="${S.addKind === k.id ? 'on' : ''}">${k.emoji} ${k.label}</button>`).join('')}
+      </div>
+      <input id="q" placeholder="Calle y número, barrio o ciudad" autocomplete="off" autocapitalize="words" style="margin-top:12px">
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="ghost" id="gps" style="flex:1">📍 Usar mi ubicación</button>
       </div>
@@ -1422,7 +1704,12 @@ function init() {
     if (!document.hidden && Date.now() - S.updated > 5 * 60000 && S.places.length) refresh();
   });
   setInterval(() => { if (!document.hidden && S.places.length) refresh(); }, 5 * 60000);
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => { });
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data && e.data.type === 'speak' && e.data.text) speak(e.data.text);
+    });
+  }
 
   (async () => {
     await loadVapid();
@@ -1434,6 +1721,11 @@ function init() {
       paint();
     }
   })();
+
+  try {
+    const q = new URLSearchParams(location.search).get('speak');
+    if (q) setTimeout(() => speak(q), 900);
+  } catch (e) { }
 
   let seen = false;
   try { seen = !!localStorage.getItem(INTRO_KEY); } catch (e) { }
