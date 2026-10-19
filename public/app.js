@@ -452,6 +452,8 @@ async function fetchPlace(p) {
   u.searchParams.set('longitude', p.lon);
   u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth');
   u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
+  u.searchParams.set('daily', 'sunrise,sunset');
+  u.searchParams.set('forecast_days', '2');
   u.searchParams.set('models', MODELS.join(','));
   u.searchParams.set('forecast_hours', '13');
   u.searchParams.set('timezone', 'auto');
@@ -460,7 +462,21 @@ async function fetchPlace(p) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j.hourly || !j.hourly.time) throw new Error('sin datos');
-  return { hourly: j.hourly, current: j.current };
+  return { hourly: j.hourly, current: j.current, daily: j.daily || null };
+}
+
+/* Amanecer y atardecer (pedido aparte, sin modelos) */
+async function fetchSun(p) {
+  const u = new URL('https://api.open-meteo.com/v1/forecast');
+  u.searchParams.set('latitude', p.lat);
+  u.searchParams.set('longitude', p.lon);
+  u.searchParams.set('daily', 'sunrise,sunset');
+  u.searchParams.set('forecast_days', '2');
+  u.searchParams.set('timezone', 'auto');
+  const r = await fetch(u.toString(), { cache: 'no-store' });
+  if (!r.ok) throw new Error('sun HTTP ' + r.status);
+  const j = await r.json();
+  return j.daily || null;
 }
 
 /* Segunda fuente independiente: MET Norway (sin clave, CORS abierto) */
@@ -624,11 +640,12 @@ async function refresh() {
   S.busy = true;
   paint();
   const results = await Promise.allSettled(S.places.map(async p => {
-    const [det, ens, met] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p), fetchMetno(p)]);
+    const [det, ens, met, sun] = await Promise.allSettled([fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p)]);
     return {
       det: det.status === 'fulfilled' ? det.value : null,
       ens: ens.status === 'fulfilled' ? ensembleRisk(ens.value) : null,
       met: met.status === 'fulfilled' ? met.value : null,
+      sun: sun.status === 'fulfilled' ? sun.value : null,
       err: det.status !== 'fulfilled' ? det.reason : null
     };
   }));
@@ -642,6 +659,8 @@ async function refresh() {
       const agg = aggregate(r.det.hourly, r.ens);
       agg.times = r.det.hourly.time;
       agg.current = r.det.current;
+      agg.sunrise = (r.sun && r.sun.sunrise) || (r.det.daily && r.det.daily.sunrise) || null;
+      agg.sunset = (r.sun && r.sun.sunset) || (r.det.daily && r.det.daily.sunset) || null;
       agg.met = r.met;
       applyLearning(p, agg);
       S.data[p.id] = agg;
@@ -899,7 +918,7 @@ function heroHtml(p) {
       <span style="display:flex;align-items:center;gap:7px">
         <span class="chip3h">${esc(info.pill)}</span>
         ${d.level >= 2 ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
-        <button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>
+        ${d.level >= 1 ? `<button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>` : ''}
       </span>
     </div>
     ${p.addr ? `<div class="addr">${esc(p.addr)}</div>` : ''}
@@ -914,7 +933,9 @@ function heroHtml(p) {
 
     <div class="action"><span class="cta">${info.cta}</span><span>${info.action}</span></div>
 
-    <div class="event ${ev.big ? 'big' : ''}">⏱ ${ev.txt}</div>
+    ${ev.txt && !/^Ráfagas/.test(ev.txt) ? `<div class="event ${ev.big ? 'big' : ''}">⏱ ${ev.txt}</div>` : ''}
+
+    ${windHtml(d)}
 
     ${timelineHtml(d)}
 
@@ -942,6 +963,15 @@ function heroHtml(p) {
   </section>`;
 }
 
+function isNightAt(d, iso) {
+  if (!d.sunrise || !d.sunset) return false;
+  const day = iso.slice(0, 10);
+  const sr = d.sunrise.find(x => x && x.slice(0, 10) === day);
+  const ss = d.sunset.find(x => x && x.slice(0, 10) === day);
+  if (!sr || !ss) return false;
+  return iso < sr || iso >= ss;
+}
+
 function timelineHtml(d) {
   if (!d.times || d.times.length < 2) return '';
   const n = Math.min(10, d.times.length);
@@ -953,20 +983,38 @@ function timelineHtml(d) {
     const probs = hs.map(h => h.prob).filter(v => v != null);
     const avgProb = probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : 0;
     const gust = Math.max(0, ...hs.map(h => h.gust || 0));
-    let ico = '☀️';
+    const night = isNightAt(d, d.times[i]);
+
+    let ico = night ? '🌙' : '☀️';
     if (snow >= 0.1) ico = '❄️';
     else if (avgP >= 2 || avgProb >= 70) ico = '🌧️';
-    else if (avgP >= 0.2 || avgProb >= 40) ico = '🌦️';
+    else if (avgP >= 0.2 || avgProb >= 40) ico = night ? '🌧️' : '🌦️';
     else if (gust >= 50) ico = '💨';
-    else if (avgProb >= 15) ico = '🌤️';
+    else if (avgProb >= 15) ico = night ? '☁️' : '🌤️';
+
     const hi = avgP >= 0.2 || gust >= 50 || snow >= 0.1;
-    out += `<div class="tl${i === 0 ? ' now' : ''}${hi ? ' hi' : ''}">
+    out += `<div class="tl${i === 0 ? ' cur' : ''}${hi ? ' hi' : ''}${night ? ' night' : ''}">
       <div class="h">${hourLabel(d.times[i]).slice(0, 2)}</div>
       <div class="e">${ico}</div>
       <div class="b"><i style="width:${Math.max(6, Math.round(avgProb))}%"></i></div>
     </div>`;
   }
   return out + '</div>';
+}
+
+function windHtml(d) {
+  const nowG = Math.round((d.current && d.current.wind_gusts_10m) || 0);
+  const max12 = Math.round(maxGust(d, 12));
+  const pct = Math.max(2, Math.min(100, Math.round(nowG / 130 * 100)));
+  const tone = nowG >= 100 ? 'bad' : nowG >= 60 ? 'strong' : nowG >= 40 ? 'mid' : 'ok';
+  return `<div class="wind ${tone}">
+    <div class="wtop"><span>💨 Ráfagas ahora</span><b>${nowG} km/h</b></div>
+    <div class="wbar"><i style="width:${pct}%"></i>
+      <u style="left:31%"></u><u style="left:46%"></u><u style="left:77%"></u>
+    </div>
+    <div class="wleg"><span>leve</span><span>moderado</span><span>fuerte</span></div>
+    <div class="wfoot">Máximo en 12 h: <b>${max12} km/h</b></div>
+  </div>`;
 }
 
 function tilesHtml(d) {
@@ -1262,6 +1310,10 @@ function b64url(obj) {
 async function sharePlace(id) {
   const p = S.places.find(x => x.id === id);
   if (!p) return;
+  if (!S.data[id] || S.data[id].level < 1) {
+    toast('El enlace se comparte desde alerta amarilla');
+    return;
+  }
   const d0 = S.data[p.id];
   const token = b64url({
     n: p.label, a: p.addr, lat: p.lat, lon: p.lon,
