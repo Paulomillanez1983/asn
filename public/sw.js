@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v42';
+﻿const CACHE = 'asn-v44';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -77,6 +77,8 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
+
 
 
 

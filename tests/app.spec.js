@@ -138,11 +138,14 @@ test('el banner de crecida aparece con hidrología en nivel 2', async ({ page })
   await page.evaluate(() => {
     S.data.t1.hydro = {
       level: 2, q: 21877, p95: 17741, rain48: 0,
-      river: 'Paraná (0.3 km)', msg: 'Posible crecida: caudal 23 % sobre el p95'
+      river: 'Paraná (0.3 km)',
+      plain: 'El río está más alto que casi todos los días de los últimos 3 meses.',
+      advice: 'Si estás cerca de la costa o en zona baja, evitá el lugar.'
     };
     paint();
   });
-  await expect(page.getByText('Crecida posible cerca de Casa')).toBeVisible();
+  await expect(page.getByText('El río está creciendo cerca de Casa')).toBeVisible();
   await expect(page.getByText(/Paraná \(0\.3 km\)/).first()).toBeVisible();
+  await expect(page.locator('.chip3h').first()).toContainText('Crecida');
 });
 

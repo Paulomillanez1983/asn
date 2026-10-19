@@ -400,7 +400,7 @@ async function riversNear(env, lat, lon) {
 }
 
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v5:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v6:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
@@ -465,11 +465,21 @@ async function hydroFor(env, lat, lon) {
   out.level = score >= 3 ? 2 : score >= 2 ? 1 : 0;
   out.ratio95 = Math.round(ratio95 * 100) / 100;
 
-  out.msg = out.level === 0
-    ? 'Sin señal de crecida'
+  out.levelWord = out.level === 0 ? 'normal' : out.level === 1 ? 'alto' : 'crecida';
+
+  out.plain = out.level === 0
+    ? 'El río está en su nivel habitual.'
     : out.level === 1
-      ? 'Caudal alto para la zona' + (out.rain48 >= 15 ? ' y lluvia reciente aguas arriba' : '')
-      : 'Posible crecida: caudal ' + Math.round((ratio95 - 1) * 100) + ' % sobre el p95';
+      ? 'El río viene creciendo y está por encima de lo habitual.'
+      : 'El río está más alto que casi todos los días de los últimos 3 meses.';
+
+  out.advice = out.level === 0
+    ? ''
+    : out.level === 1
+      ? 'Todavía no es una crecida, pero conviene estar atento si estás cerca de la costa.'
+      : 'Si estás cerca de la costa o en zona baja, evitá el lugar y seguí el aviso.';
+
+  out.msg = out.plain;
 
   await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
   return out;
@@ -608,8 +618,9 @@ async function runAlerts(env) {
           if (h.level >= 1 && h.level > hPrev && !hQuiet) {
             const r2 = await sendPush(
               env, rec.sub,
-              '🌊 Posible crecida · ' + (h.river || 'río cercano'),
-              h.msg + ' cerca de ' + tag + '.',
+              '🌊 ' + (h.level >= 2 ? 'El río está creciendo' : 'El río está alto') +
+              ' · ' + (h.river || 'río cercano'),
+              h.plain + ' ' + (h.advice || '') + ' Cerca de ' + tag + '.',
               'hydro-' + hk
             );
             if (r2 === 'gone') { gone = true; break; }
@@ -630,6 +641,7 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
 
 
 

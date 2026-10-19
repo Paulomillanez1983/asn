@@ -938,6 +938,8 @@ function heroHtml(p) {
     </section>`;
   }
   const info = levelInfo(d);
+  const hyLvl = (d.hydro && d.hydro.level) || 0;
+  const pill = hyLvl >= 2 ? '🌊 Crecida' : hyLvl === 1 ? '🌊 Río alto' : info.pill;
   const ev = eventText(d);
   const k = kindOf(p);
   const c = d.current || {};
@@ -958,7 +960,7 @@ function heroHtml(p) {
     <div class="where">
       <span>${k.emoji} <b>${esc(p.label)}</b></span>
       <span style="display:flex;align-items:center;gap:7px">
-        <span class="chip3h">${esc(info.pill)}</span>
+        <span class="chip3h${hyLvl >= 1 ? ' hydro' : ''}">${esc(pill)}</span>
         ${d.level >= 2 ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
         ${d.level >= 1 ? `<button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>` : ''}
       </span>
@@ -1081,11 +1083,9 @@ function hydroHtml(d, p) {
       riverName = nearby[0].name + ' (' + nearby[0].d + ' km)';
     }
     if (!riverName) riverName = 'Río cercano';
-    const q = Number(h.q).toFixed(0);
-    const p95 = h.p95 != null ? Number(h.p95).toFixed(0) : '—';
-    const tone = h.level === 0 ? 'normal' : h.level === 1 ? 'alto' : 'crecida';
-    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p95 ${p95} ·
-      lluvia 48 h ${h.rain48} mm · <b>${tone}</b></div>`);
+    const state = h.level === 0 ? 'nivel habitual' : h.level === 1 ? 'alto' : 'crecida';
+    const rainTxt = h.rain48 >= 1 ? ` · lluvia de las últimas 48 h: ${h.rain48} mm` : '';
+    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · ${esc(h.plain || state)}${rainTxt}</div>`);
   }
   const rivers = (p && S.rivers && S.rivers[p.id]) || [];
   if (rivers.length) {
@@ -1197,10 +1197,10 @@ function hydroBanner() {
   const p = S.places.find(x => S.data[x.id] && S.data[x.id].hydro && S.data[x.id].hydro.level >= 1);
   if (!p) return '';
   const h = S.data[p.id].hydro;
-  const title = (h.level >= 2 ? 'Crecida posible' : 'Río alto') + ' cerca de ' + p.label;
+  const title = (h.level >= 2 ? 'El río está creciendo' : 'El río está alto') + ' cerca de ' + p.label;
   return `<div class="banner warn">
     <div class="bi">🌊</div>
-    <div class="bt"><b>${esc(title)}</b><span>${esc(h.river || '')} · ${Math.round(h.q)} m³/s · ${esc(h.msg || '')}</span></div>
+    <div class="bt"><b>${esc(title)}</b><span>${esc(h.river || '')} · ${esc(h.plain || '')}</span></div>
   </div>`;
 }
 
