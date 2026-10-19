@@ -155,7 +155,22 @@ async function api(req, env, url) {
     if (!body || !body.endpoint) return json({ error: 'falta endpoint' }, 400);
     const rec = await env.SUBS.get('sub:' + await hash(body.endpoint), 'json');
     if (!rec) return json({ error: 'no suscripto' }, 404);
-    const r = await sendPush(env, rec.sub, '🔔 ASN 4.0', 'Prueba de aviso en tiempo real. Si lo ves, funciona.', 'test');
+
+    const place = (rec.places && rec.places[0] && rec.places[0].name) || 'tu zona';
+    let title = '🔔 ASN 4.0';
+    let text = 'Prueba de aviso en tiempo real. Si lo ves, funciona.';
+
+    if (body.kind === 'hydro') {
+      title = '🌊 El río está creciendo · Paraná (0.3 km)';
+      text = 'El río está más alto que casi todos los días de los últimos 3 meses. ' +
+        'Si estás cerca de la costa o en zona baja, evitá el lugar y seguí el aviso. ' +
+        'Cerca de ' + place + '. (Prueba)';
+    } else if (body.kind === 'rain') {
+      title = '🟠 Alerta naranja · 🌧️ lluvia en ' + place;
+      text = 'Se viene lluvia fuerte en las próximas 3 horas. Guardá lo que tengas afuera y cerrá las ventanas. (Prueba)';
+    }
+
+    const r = await sendPush(env, rec.sub, title, text, 'test');
     return json({ result: r });
   }
 
