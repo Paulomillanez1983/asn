@@ -370,6 +370,23 @@ function phenomenon(d) {
   return { key: 'viento', word: 'ráfagas', emoji: '💨' };
 }
 
+/* sirena con baliza girando, para los avisos de crecida grave */
+function sirenaSvg(px) {
+  const s = px || 26;
+  return `<svg class="sirena" viewBox="0 0 48 48" width="${s}" height="${s}" aria-hidden="true" focusable="false">
+    <circle class="sir-halo" cx="24" cy="28" r="15"/>
+    <rect x="7" y="30" width="34" height="10" rx="3" fill="#22304a"/>
+    <rect x="7" y="30" width="34" height="3" rx="1.5" fill="#42587c"/>
+    <path d="M11 30 C11 14 37 14 37 30 Z" fill="#D81E2C"/>
+    <path d="M14 26 C15 20.5 20 17.4 24 17.2" fill="none" stroke="#FF9A90"
+      stroke-opacity=".85" stroke-width="2.2" stroke-linecap="round"/>
+    <g class="sir-sweep">
+      <path d="M24 30 L22.3 19.1 A11 11 0 0 1 25.7 19.1 Z" fill="#FFF4F1" opacity=".66"/>
+    </g>
+    <rect x="17" y="40" width="14" height="3" rx="1.5" fill="#18213a"/>
+  </svg>`;
+}
+
 function levelInfo(d) {
   if (d.hydro && d.hydro.level >= 1) {
     const h = d.hydro;
@@ -384,7 +401,7 @@ function levelInfo(d) {
       line: (h.plain || 'El río está alto.') + tail,
       detail: h.history || '',
       action: h.advice || 'Seguí el aviso si estás cerca de la costa.',
-      cta: lv >= 3 ? '🚨' : '🌊',
+      cta: lv >= 3 ? sirenaSvg(26) : '🌊',
       pill: pills[lv]
     };
   }
@@ -1351,7 +1368,7 @@ function hydroBanner() {
   const sub = [h.river, first].filter(Boolean).join(' · ');
 
   return `<div class="banner ${tone}">
-    <div class="bi">${lv >= 3 ? '🚨' : '🌊'}</div>
+    <div class="bi">${lv >= 3 ? sirenaSvg(30) : '🌊'}</div>
     <div class="bt"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
   </div>`;
 }
