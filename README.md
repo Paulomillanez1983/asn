@@ -1,8 +1,8 @@
-# ASN 4.0 — Alerta Super Niño
+﻿# ASN 4.0 — Alerta Super Niño
 
 Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica en tus lugares.
 
-**App:** https://paulomillanez1983.github.io/asn/
+**App:** https://asn.asn-clima.workers.dev/
 
 ## Cómo está pensada
 
@@ -48,24 +48,36 @@ Además se calculan los cuatro modelos determinísticos (ECMWF, GFS, ICON, GEM) 
 
 - **App abierta o en segundo plano:** notificación del navegador **desde amarilla en adelante**, con el color y el fenómeno en el título: `🟡 Alerta amarilla · 💨 ráfagas en Casa`, `🔴 Alerta roja · 🧊 granizo en Colegio`, `🟠 Alerta naranja · 🌊 lluvia torrencial en Casa`. El mismo nivel no se repite antes de 3 h.
 - **Pregunta en pantalla:** a los 20 segundos de abrir, la app pregunta “¿Qué estás viendo en tu zona?” (máximo cada 6 h). Con esa respuesta cruza el reporte con el radar de RainViewer en vivo y guarda el resultado para la estadística de acierto por modelo.
-- **App cerrada:** GitHub Actions cada 10 minutos con el mismo criterio de ensemble, publicando en **ntfy.sh**. Instalá ntfy y suscribite al canal que muestra ⚙️ Ajustes.
-- **Reglas de emisión:** mismo nivel no se repite antes de 3 h; el nivel baja sólo tras dos corridas por debajo; de 23 a 7 sólo pasa el nivel 3.
+- **App cerrada:** **Web Push real** desde un Worker de Cloudflare (cron cada 10 minutos). No hay que instalar ntfy ni ninguna otra app: se activa con un toque desde ⚙️ Ajustes y se prueba con el botón **Probar**.
+- **Reglas de emisión:** mismo nivel no se repite antes de 3 h; el nivel baja sólo tras dos corridas por debajo; de 23 a 7 sólo pasan roja y morada.
 
-### Secretos del repositorio
+## Infraestructura
 
-| Secreto | Contenido |
+| Pieza | Detalle |
 |---|---|
-| `PLACES` | `[{"n":"Casa","lat":-31.33,"lon":-64.256}]` |
-| `NTFY_TOPIC` | el mismo canal que muestra la app |
+| Dominio | https://asn.asn-clima.workers.dev/ |
+| Hosting | Cloudflare Worker `asn` con assets estáticos desde `public/` |
+| Suscripciones | KV `SUBS` (una entrada por dispositivo, con sus lugares) |
+| Chequeo | Cron `*/10 * * * *` sobre el ensemble del IFS |
+| Push | Web Push VAPID (P-256 + aes128gcm), servicio FCM/APNs del navegador |
+
+Despliegue:
+
+```bash
+npx wrangler deploy
+```
+
+Secretos del Worker: `VAPID_PRIVATE` y `VAPID_SUBJECT` (la clave pública vive en `wrangler.toml`).
 
 ## Estructura
 
 ```
-index.html            interfaz + hoja de bienvenida y simulador
-app.js                ensemble, riesgo, lenguaje humano, ajustes
-sw.js                 service worker (offline + notificaciones)
-manifest.json         instalación como app
-alert.mjs             chequeo en segundo plano (Node 20, sin dependencias)
+public/index.html     interfaz + hoja de bienvenida y simulador
+public/app.js         ensemble, riesgo, aprendizaje, push, ajustes
+public/sw.js          service worker (offline + evento push)
+public/manifest.json  instalación como app
+worker/index.js       API de suscripción + cron de alertas + envío push
+wrangler.toml         configuración del Worker, KV y cron
 docs/INVESTIGACION.md investigación con fuentes y umbrales
 hardware/             sensor de canal con ESP32 (opcional)
 ```
@@ -85,3 +97,4 @@ El repositorio no contiene direcciones, teléfonos ni coordenadas. Los lugares s
 No reemplaza tu criterio. El granizo es el fenómeno más difícil: la app lo marca como "posible", nunca como certeza, porque sin radar propio no hay forma de confirmarlo. Si el cielo se pone feo, abrí el radar desde "Ver detalles".
 
 Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-Meteo; RainViewer; Blitzortung). No se usan datos de organismos provinciales ni nacionales: no publican verificación estación por estación ni endpoints utilizables.
+

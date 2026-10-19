@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v9';
+﻿const CACHE = 'asn-v10';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -43,6 +43,22 @@ self.addEventListener('fetch', e => {
   }
 });
 
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  const title = d.title || 'ASN 4.0';
+  const body = d.body || 'Hay una alerta nueva en tus lugares.';
+  e.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
+    vibrate: [300, 100, 300],
+    requireInteraction: true,
+    tag: d.tag || 'asn',
+    data: { url: d.url || './' }
+  }));
+});
+
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   e.waitUntil(
@@ -52,6 +68,7 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
 
 
 

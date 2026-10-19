@@ -3,3 +3,7 @@
 Thumbs.db
 
 places.json
+
+node_modules
+.dev.vars
+.wrangler

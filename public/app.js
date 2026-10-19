@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 /* ===================== Configuración ===================== */
 const MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'gem_seamless'];
@@ -22,7 +22,7 @@ const S = {
   places: [], topic: DEFAULT_TOPIC, last: {}, feedback: [],
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
-  askPlace: null, radarResult: null, learn: {}
+  askPlace: null, radarResult: null, learn: {}, pushActive: false
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -97,6 +97,115 @@ function seriesByBase(H, base) {
 function isStandalone() {
   return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
     navigator.standalone === true;
+}
+
+/* ===================== Web Push ===================== */
+let pushKey = null;
+let pushSub = null;
+
+function b64ToU8(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const b = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...b].map(c => c.charCodeAt(0)));
+}
+
+async function loadVapid() {
+  if (pushKey) return pushKey;
+  try {
+    const r = await fetch('/api/vapid', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    pushKey = j.key || null;
+    return pushKey;
+  } catch (e) { return null; }
+}
+
+async function currentPush() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch (e) { return null; }
+}
+
+async function postSubscription(sub) {
+  try {
+    await fetch('/api/subscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subscription: sub.toJSON(),
+        places: S.places.map(p => ({ name: p.name, lat: p.lat, lon: p.lon }))
+      })
+    });
+  } catch (e) { }
+}
+
+async function syncPush() {
+  if (pushSub) await postSubscription(pushSub);
+}
+
+async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    toast('Este navegador no permite avisos en tiempo real');
+    return;
+  }
+  if (!S.places.length) {
+    toast('Primero agregá un lugar');
+    openAdd();
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('Permiso de avisos rechazado'); paint(); return; }
+  const key = await loadVapid();
+  if (!key) { toast('Los avisos necesitan la versión de Cloudflare'); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+    }
+    pushSub = sub;
+    await postSubscription(sub);
+    S.pushActive = true;
+    S.hideNotify = true;
+    toast('Avisos en tiempo real activados');
+  } catch (e) {
+    toast('No pudimos activar los avisos');
+  }
+  paint();
+}
+
+async function disablePush() {
+  try {
+    const sub = pushSub || await currentPush();
+    if (sub) {
+      await fetch('/api/unsubscribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub.endpoint })
+      });
+      await sub.unsubscribe();
+    }
+  } catch (e) { }
+  pushSub = null;
+  S.pushActive = false;
+  toast('Avisos desactivados');
+  paint();
+}
+
+async function testPush() {
+  const sub = pushSub || await currentPush();
+  if (!sub) { toast('Primero activá los avisos'); return; }
+  try {
+    const r = await fetch('/api/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: sub.endpoint })
+    });
+    const j = await r.json();
+    toast(j.result === 'ok' ? 'Aviso de prueba enviado' : 'El envío falló: ' + (j.error || j.result));
+  } catch (e) { toast('No pudimos enviar la prueba'); }
 }
 
 /* ===================== Riesgo ===================== */
@@ -496,16 +605,7 @@ function notify(title, body) {
 }
 
 async function askNotify() {
-  if (typeof Notification === 'undefined') { toast('Este navegador no permite avisos'); return; }
-  const perm = await Notification.requestPermission();
-  if (perm === 'granted') {
-    S.hideNotify = false;
-    notify('ASN 4.0 · avisos activados', 'Así te vamos a avisar.');
-    toast('Listo, avisos activados');
-  } else {
-    toast(perm === 'denied' ? 'Quedaron bloqueados en el navegador' : 'No se activaron');
-  }
-  paint();
+  return enablePush();
 }
 
 /* ===================== Instalación ===================== */
@@ -636,7 +736,7 @@ function installBanner() {
 
 function notifyBanner() {
   const p = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
-  if (p === 'granted' || S.hideNotify || p === 'unsupported') return '';
+  if (S.pushActive || S.hideNotify || p === 'unsupported') return '';
   if (p === 'denied') {
     return `<div class="banner warn">
       <div class="bi">🔕</div>
@@ -866,14 +966,15 @@ function viewSettings() {
   <div class="card list">
     <div class="row"><div class="grow"><b>Instalar en el teléfono</b><small>${isStandalone() ? 'Ya instalada' : 'Pantalla completa y avisos'}</small></div>
       ${isStandalone() ? '<span style="color:#34d399;font-size:13px">✓</span>' : '<button class="ghost" id="installBtn" style="padding:8px 12px;font-size:13px">Instalar</button>'}</div>
-    <div class="row"><div class="grow"><b>Avisos</b><small>${perm === 'granted' ? 'Activados' : perm === 'denied' ? 'Bloqueados por el navegador' : 'Sin activar'}</small></div>
-      ${perm === 'granted' ? '<button class="ghost" id="enableNotify" style="padding:8px 12px;font-size:13px">Probar</button>' : '<button class="ghost" id="enableNotify" style="padding:8px 12px;font-size:13px">Activar</button>'}</div>
-    <div class="row"><div class="grow"><b>Avisos con la app cerrada</b><small>Canal de ntfy</small></div></div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <input value="${esc(S.topic)}" readonly style="font-size:12.5px">
-      <button class="ghost" id="copyTopic" style="padding:10px 13px;font-size:13px">Copiar</button>
-    </div>
-    <p class="hint">Instalá la app <b>ntfy</b> en el celular y suscribite a este canal: así llegan los avisos aunque ASN esté cerrada.</p>
+    <div class="row"><div class="grow"><b>Avisos en tiempo real</b><small>${S.pushActive ? 'Activados en este dispositivo' : perm === 'denied' ? 'Bloqueados por el navegador' : 'Sin activar'}</small></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        ${S.pushActive
+      ? '<button class="ghost" id="testPush" style="padding:8px 12px;font-size:13px">Probar</button><button class="ghost" id="disablePush" style="padding:8px 12px;font-size:13px">Desactivar</button>'
+      : '<button class="ghost" id="enableNotify" style="padding:8px 12px;font-size:13px">Activar</button>'}
+      </div></div>
+    <p class="hint">${S.pushActive
+      ? 'Llegan aunque la app esté cerrada. No hace falta instalar nada más.'
+      : 'Se activan con un toque y funcionan con la app cerrada. Si el navegador ya bloqueó el permiso, abrilo desde el candado de la barra de direcciones.'}</p>
   </div>
 
   <div class="sec">Qué fuente acierta más acá</div>
@@ -1009,6 +1110,7 @@ function addPlace(p) {
   S.places.push({ id: uid(), name: p.label || p.name, lat: +p.lat, lon: +p.lon });
   S.results = []; S.query = ''; S.view = 'home';
   save(); paint(); refresh();
+  syncPush();
 }
 
 function useGPS() {
@@ -1173,7 +1275,7 @@ function recordFeedback(p, a) {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#copyTopic,#reopenIntro,#startBtn,#installBtn');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush');
   if (!t) return;
 
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -1236,6 +1338,8 @@ document.addEventListener('click', ev => {
   if (t.id === 'startAdd' || t.id === 'addPlace') { openAdd(); return; }
   if (t.id === 'gps') { useGPS(); return; }
   if (t.id === 'enableNotify') { askNotify(); return; }
+  if (t.id === 'testPush') { testPush(); return; }
+  if (t.id === 'disablePush') { disablePush(); return; }
   if (t.id === 'copyTopic') {
     navigator.clipboard.writeText(S.topic).then(() => toast('Canal copiado'), () => toast('No se pudo copiar'));
     return;
@@ -1257,7 +1361,7 @@ document.addEventListener('click', ev => {
     const id = t.getAttribute('data-del');
     S.places = S.places.filter(p => p.id !== id);
     delete S.data[id]; delete S.last[id];
-    save(); paint(); return;
+    save(); paint(); syncPush(); return;
   }
   if (t.hasAttribute('data-ask')) {
     const id = t.getAttribute('data-ask');
@@ -1320,6 +1424,17 @@ function init() {
   setInterval(() => { if (!document.hidden && S.places.length) refresh(); }, 5 * 60000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
 
+  (async () => {
+    await loadVapid();
+    const sub = await currentPush();
+    if (sub) {
+      pushSub = sub;
+      S.pushActive = true;
+      await postSubscription(sub);
+      paint();
+    }
+  })();
+
   let seen = false;
   try { seen = !!localStorage.getItem(INTRO_KEY); } catch (e) { }
   if (!seen) setTimeout(openSheet, 2500);
@@ -1332,3 +1447,4 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
