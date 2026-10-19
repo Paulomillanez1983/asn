@@ -259,7 +259,7 @@ function pointRisk(o) {
 
 function modelRisk(H, m) {
   const g = k => H[k + '_' + m] || [];
-  const pr = g('precipitation'), gu = g('wind_gusts_10m'), pp = g('precipitation_probability');
+  const pr = g('precipitation'), gu = g('wind_gusts_10m'), pp = g('precipitation_probability'), cc = g('cloud_cover');
   let acc = 0, lvl = 0, rain = false, wind = false;
   const hours = [];
   for (let i = 0; i < pr.length; i++) {
@@ -270,7 +270,7 @@ function modelRisk(H, m) {
       lvl = Math.max(lvl, x.l);
       rain = rain || x.rain; wind = wind || x.wind;
     }
-    hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0 });
+    hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0, cl: cc[i] ?? null });
   }
   lvl = Math.max(lvl, acc >= 100 ? 4 : acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
   const rate = Math.max(0, ...hours.slice(0, 3).map(h => h.p || 0));
@@ -450,7 +450,7 @@ async function fetchPlace(p) {
   const u = new URL('https://api.open-meteo.com/v1/forecast');
   u.searchParams.set('latitude', p.lat);
   u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth');
+  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth,cloud_cover');
   u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
   u.searchParams.set('daily', 'sunrise,sunset');
   u.searchParams.set('forecast_days', '2');
@@ -963,6 +963,16 @@ function heroHtml(p) {
   </section>`;
 }
 
+const MOON = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+
+function moonPhaseEmoji(date) {
+  const ref = Date.UTC(2000, 0, 6, 18, 14);
+  const syn = 29.530588853;
+  const days = (date.getTime() - ref) / 86400000;
+  const frac = (((days % syn) + syn) % syn) / syn;
+  return MOON[Math.round(frac * 8) % 8];
+}
+
 function isNightAt(d, iso) {
   if (!d.sunrise || !d.sunset) return false;
   const day = iso.slice(0, 10);
@@ -984,13 +994,21 @@ function timelineHtml(d) {
     const avgProb = probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : 0;
     const gust = Math.max(0, ...hs.map(h => h.gust || 0));
     const night = isNightAt(d, d.times[i]);
+    const clouds = hs.map(h => h.cl).filter(v => v != null);
+    const avgCloud = clouds.length ? clouds.reduce((a, b) => a + b, 0) / clouds.length : 0;
 
-    let ico = night ? '🌙' : '☀️';
+    let ico;
     if (snow >= 0.1) ico = '❄️';
     else if (avgP >= 2 || avgProb >= 70) ico = '🌧️';
-    else if (avgP >= 0.2 || avgProb >= 40) ico = night ? '🌧️' : '🌦️';
+    else if (avgP >= 0.2) ico = night ? '🌧️' : '🌦️';
     else if (gust >= 50) ico = '💨';
-    else if (avgProb >= 15) ico = night ? '☁️' : '🌤️';
+    else if (night) {
+      if (avgCloud >= 70) ico = '☁️';
+      else if (avgCloud >= 25) ico = moonPhaseEmoji(new Date(d.times[i])) + '<span class="cl">☁️</span>';
+      else ico = moonPhaseEmoji(new Date(d.times[i]));
+    } else {
+      ico = avgCloud >= 70 ? '☁️' : avgCloud >= 25 ? '🌤️' : '☀️';
+    }
 
     const hi = avgP >= 0.2 || gust >= 50 || snow >= 0.1;
     out += `<div class="tl${i === 0 ? ' cur' : ''}${hi ? ' hi' : ''}${night ? ' night' : ''}">
