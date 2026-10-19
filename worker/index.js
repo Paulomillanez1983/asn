@@ -84,6 +84,13 @@ async function api(req, env, url) {
     return json({ ok: true });
   }
 
+  if (url.pathname === '/api/rivers' && req.method === 'GET') {
+    const lat = Number(url.searchParams.get('lat'));
+    const lon = Number(url.searchParams.get('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+    return json(await riversNear(env, lat, lon));
+  }
+
   if (url.pathname === '/api/hydro' && req.method === 'GET') {
     const lat = Number(url.searchParams.get('lat'));
     const lon = Number(url.searchParams.get('lon'));
@@ -281,8 +288,67 @@ async function inaNear(env, lat, lon) {
     .slice(0, 3);
 }
 
+async function overpassJson(q) {
+  const bases = [
+    'https://overpass.kumi.systems/api/interpreter?data=',
+    'https://overpass-api.de/api/interpreter?data='
+  ];
+  for (const base of bases) {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 18000);
+      const r = await fetch(base + encodeURIComponent(q), {
+        signal: ctl.signal,
+        headers: { 'User-Agent': 'ASN4/1.0 (contacto: paulomillanez@gmail.com)', accept: 'application/json' }
+      });
+      clearTimeout(t);
+      if (r.ok) return await r.json();
+    } catch (e) { }
+  }
+  return null;
+}
+
+async function riversNear(env, lat, lon) {
+  const key = `rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const hit = await env.SUBS.get(key, 'json');
+  if (hit) return hit;
+
+  const dLat = 0.06, dLon = 0.07;
+  const viewbox = [lon - dLon, lat + dLat, lon + dLon, lat - dLat].map(v => v.toFixed(4)).join(',');
+  const terms = ['arroyo', 'rio', 'canal'];
+  const seen = new Map();
+
+  for (const term of terms) {
+    try {
+      const u = 'https://nominatim.openstreetmap.org/search?q=' + term +
+        '&format=jsonv2&viewbox=' + viewbox + '&bounded=1&limit=10&accept-language=es';
+      const r = await fetch(u, {
+        headers: { 'User-Agent': 'ASN4/1.0 (contacto: paulomillanez@gmail.com)', accept: 'application/json' }
+      });
+      if (r.ok) {
+        const j = await r.json();
+        for (const x of j) {
+          const n = (x.name || (x.display_name || '').split(',')[0] || '').trim();
+          if (!n) continue;
+          const d = Math.round(distKm(lat, lon, +x.lat, +x.lon) * 10) / 10;
+          if (d > 6) continue;
+          const k = n.toLowerCase();
+          if (!seen.has(k) || seen.get(k).d > d) {
+            seen.set(k, { name: n, kind: x.type || 'curso', lat: +x.lat, lon: +x.lon, d });
+          }
+        }
+      }
+    } catch (e) { }
+    await new Promise(r => setTimeout(r, 1100)); // política de uso de Nominatim
+  }
+
+  const list = [...seen.values()].sort((a, b) => a.d - b.d).slice(0, 6);
+  if (list.length) await env.SUBS.put(key, JSON.stringify(list), { expirationTtl: 604800 });
+  return list;
+}
+
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v2:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v3:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
@@ -317,6 +383,13 @@ async function hydroFor(env, lat, lon) {
   try { out.stations = await inaNear(env, lat, lon); } catch (e) { }
   const st = out.stations[0];
   out.river = st && st.r ? st.r : 'Río cercano';
+
+  try {
+    const cachedRivers = await env.SUBS.get(`rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`, 'json');
+    if (cachedRivers && cachedRivers.length) {
+      out.river = cachedRivers[0].name + ' (' + cachedRivers[0].d + ' km)';
+    }
+  } catch (e) { }
 
   const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
   let score = 0;
@@ -491,6 +564,8 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
+
 
 
 

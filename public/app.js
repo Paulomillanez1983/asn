@@ -31,7 +31,7 @@ const S = {
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
   askPlace: null, radarResult: null, learn: {}, pushActive: false,
-  voice: true, addKind: 'casa'
+  voice: true, addKind: 'casa', rivers: {}
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -470,6 +470,15 @@ async function fetchPlace(p) {
 }
 
 /* Hidrología: caudal (GloFAS) + estaciones INA, vía Worker */
+async function fetchRivers(p) {
+  try {
+    const r = await fetch('/api/rivers?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j) ? j : [];
+  } catch (e) { return []; }
+}
+
 async function fetchHydro(p) {
   try {
     const r = await fetch('/api/hydro?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
@@ -697,6 +706,16 @@ async function refresh() {
   S.busy = false;
   save();
   paint();
+
+  /* ríos con nombre cerca de cada lugar (consulta pesada, se cachea 7 días) */
+  S.places.forEach(p => {
+    if (S.rivers[p.id]) return;
+    S.rivers[p.id] = [];
+    fetchRivers(p).then(list => {
+      S.rivers[p.id] = list;
+      if (list.length && S.view === 'home') paint();
+    });
+  });
   if (!ok && S.places.length) toast('No pudimos actualizar. Fijate la conexión.');
 }
 
@@ -966,7 +985,7 @@ function heroHtml(p) {
 
     <details class="more">
       <summary>Ver detalles</summary>
-      ${hydroHtml(d)}
+      ${hydroHtml(d, p)}
       <div class="mrow">${d.models.map(x => `<span><i class="dot d${x.l}"></i>${MODEL_NAME[x.m]}</span>`).join('')}</div>
       ${probHtml(d)}
       ${barsHtml(d)}
@@ -1038,15 +1057,28 @@ function timelineHtml(d) {
   return out + '</div>';
 }
 
-function hydroHtml(d) {
+function hydroHtml(d, p) {
+  const rows = [];
   const h = d.hydro;
-  if (!h || h.q == null) return '';
-  const riverName = String(h.river || 'Río cercano').trim();
-  const q = Number(h.q).toFixed(2);
-  const p90 = h.p90 != null ? Number(h.p90).toFixed(2) : '—';
-  const tone = h.level === 0 ? 'normal' : h.level === 1 ? 'alto' : 'crecida';
-  return `<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p90 ${p90} ·
-    lluvia 48 h ${h.rain48} mm · <b>${tone}</b></div>`;
+  const nearby = (p && S.rivers && S.rivers[p.id]) || [];
+  if (h && h.q != null) {
+    let riverName = String(h.river || '').trim();
+    if ((!riverName || riverName === 'Río cercano') && nearby.length) {
+      riverName = nearby[0].name + ' (' + nearby[0].d + ' km)';
+    }
+    if (!riverName) riverName = 'Río cercano';
+    const q = Number(h.q).toFixed(2);
+    const p90 = h.p90 != null ? Number(h.p90).toFixed(2) : '—';
+    const tone = h.level === 0 ? 'normal' : h.level === 1 ? 'alto' : 'crecida';
+    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p90 ${p90} ·
+      lluvia 48 h ${h.rain48} mm · <b>${tone}</b></div>`);
+  }
+  const rivers = (p && S.rivers && S.rivers[p.id]) || [];
+  if (rivers.length) {
+    const list = rivers.slice(0, 3).map(r => `${esc(r.name)} · ${r.d} km`).join(' · ');
+    rows.push(`<div class="prob">🏞️ Ríos cerca: ${list}</div>`);
+  }
+  return rows.join('');
 }
 
 function hydroAskBanner() {
