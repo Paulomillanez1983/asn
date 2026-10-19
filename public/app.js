@@ -31,7 +31,8 @@ const S = {
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
   askPlace: null, radarResult: null, learn: {}, pushActive: false,
-  voice: true, addKind: 'casa', rivers: {}
+  voice: true, addKind: 'casa', rivers: {},
+  geoAsked: false, travel: null, travelSkip: {}
 };
 
 /* ===================== Almacenamiento ===================== */
@@ -62,11 +63,14 @@ function load() {
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
   S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
   if (raw.voice === false) S.voice = false;
+  S.geoAsked = raw.geoAsked === true;
+  S.travelSkip = (raw.travelSkip && typeof raw.travelSkip === 'object') ? raw.travelSkip : {};
 }
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice
+      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice,
+      geoAsked: S.geoAsked, travelSkip: S.travelSkip
     }));
   } catch (e) { }
 }
@@ -871,7 +875,7 @@ function viewHome() {
         : '');
   }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
-  return installBanner() + notifyBanner() + hydroAskBanner() + body + add +
+  return geoAskBanner() + travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
     `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
 }
 
@@ -1081,6 +1085,80 @@ function hydroHtml(d, p) {
   return rows.join('');
 }
 
+/* ===================== Detección de viaje ===================== */
+function haversineKm(a, b, c, d) {
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(c - a), dLon = rad(d - b);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function getPosition() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: false, timeout: 9000, maximumAge: 600000 }
+    );
+  });
+}
+
+async function reverseName(lat, lon) {
+  try {
+    const u = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=es&lat=' + lat + '&lon=' + lon;
+    const r = await fetch(u, { cache: 'no-store' });
+    if (!r.ok) return '';
+    const j = await r.json();
+    const a = j.address || {};
+    return a.city || a.town || a.village || a.suburb || a.county || j.name || '';
+  } catch (e) { return ''; }
+}
+
+async function checkTravel() {
+  if (!S.places.length) return;
+  const pos = await getPosition();
+  if (!pos) return;
+
+  const nearest = S.places
+    .map(p => ({ p, d: haversineKm(pos.lat, pos.lon, p.lat, p.lon) }))
+    .sort((a, b) => a.d - b.d)[0];
+
+  if (nearest && nearest.d < 12) {
+    if (S.travel) { S.travel = null; paint(); }
+    return;
+  }
+
+  const cell = pos.lat.toFixed(1) + ',' + pos.lon.toFixed(1);
+  if (S.travelSkip[cell] && Date.now() - S.travelSkip[cell] < 12 * 3600 * 1000) return;
+
+  const name = await reverseName(pos.lat, pos.lon);
+  S.travel = { lat: pos.lat, lon: pos.lon, name, dist: nearest ? Math.round(nearest.d) : null, cell };
+  paint();
+}
+
+function geoAskBanner() {
+  if (S.geoAsked || !('geolocation' in navigator) || !S.places.length) return '';
+  return `<div class="banner">
+    <div class="bi">📍</div>
+    <div class="bt"><b>¿Te avisamos si te movés de zona?</b><span>Con permiso de ubicación detectamos si estás en otro lugar y te ofrecemos seguirlo.</span></div>
+    <button data-geo="on">Permitir</button>
+    <button class="x2" data-geo="off" aria-label="No">✕</button>
+  </div>`;
+}
+
+function travelBanner() {
+  const t = S.travel;
+  if (!t) return '';
+  const label = t.name || 'esta zona';
+  return `<div class="banner">
+    <div class="bi">📍</div>
+    <div class="bt"><b>Parece que estás en ${esc(label)}</b><span>${t.dist ? 'A ' + t.dist + ' km de tus lugares. ' : ''}¿Querés seguir el clima de acá?</span></div>
+    <button data-travel="add">Sí</button>
+    <button class="x2" data-travel="skip" aria-label="Ahora no">✕</button>
+  </div>`;
+}
+
 function hydroAskBanner() {
   const p = S.places.find(x => x.hydro === undefined);
   if (!p) return '';
@@ -1168,7 +1246,7 @@ function barsHtml(d) {
     out += `<div class="bar${v.rain ? ' s' : ''}" style="height:${Math.max(6, Math.round(v.avg))}%" title="${Math.round(v.avg)}%"></div>`;
     meta += `<div>${i % 2 === 0 ? hourLabel(d.times[i]).slice(0, 2) : ''}</div>`;
   });
-  return out + '</div>' + meta + '</div></div>';
+  return out + '</div>' + meta + '</div>';
 }
 
 function askHtml(p) {
@@ -1684,7 +1762,7 @@ function recordFeedback(p, a) {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,#startAdd,#addPlace,#gear,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -1728,6 +1806,35 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-closegif')) { document.getElementById('gifSheet').hidden = true; return; }
   if (t.id === 'gifShare') { shareGif(); return; }
   if (t.id === 'gifSave') { saveGif(); return; }
+  if (t.hasAttribute('data-geo')) {
+    const on = t.getAttribute('data-geo') === 'on';
+    S.geoAsked = true;
+    save();
+    if (on) {
+      getPosition().then(pos => {
+        paint();
+        if (pos) checkTravel();
+      });
+    } else {
+      paint();
+    }
+    return;
+  }
+  if (t.hasAttribute('data-travel')) {
+    if (t.getAttribute('data-travel') === 'add' && S.travel) {
+      const tr = S.travel;
+      S.addKind = 'importante';
+      addPlace({ label: tr.name || 'Estoy acá', addr: tr.name || '', lat: tr.lat, lon: tr.lon });
+      S.travel = null;
+      save(); paint();
+      toast('Lugar agregado');
+    } else if (S.travel) {
+      S.travelSkip[S.travel.cell] = Date.now();
+      S.travel = null;
+      save(); paint();
+    }
+    return;
+  }
   if (t.hasAttribute('data-hydro')) {
     const p = S.places.find(x => x.id === t.getAttribute('data-place'));
     if (p) {
@@ -1891,8 +1998,18 @@ function init() {
     setInterval(maybeOpenAsk, 15000);
   }, 20000);
 
+  if (S.geoAsked && navigator.permissions) {
+    navigator.permissions.query({ name: 'geolocation' })
+      .then(r => { if (r.state === 'granted') setTimeout(checkTravel, 4000); })
+      .catch(() => { });
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && S.geoAsked) checkTravel();
+  });
+
   window.__asnBooted = true;
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
 
