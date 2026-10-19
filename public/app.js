@@ -382,7 +382,7 @@ function levelInfo(d) {
       emoji: '🌊',
       title: h.headline || (lv >= 3 ? 'Crecida grave' : lv === 2 ? 'Alerta por crecida' : 'Río alto'),
       line: (h.plain || 'El río está alto.') + tail,
-      detail: h.detail || '',
+      detail: h.history || '',
       action: h.advice || 'Seguí el aviso si estás cerca de la costa.',
       cta: lv >= 3 ? '🚨' : '🌊',
       pill: pills[lv]
@@ -1017,18 +1017,20 @@ function heroHtml(p) {
 
     <div class="action"><span class="cta">${info.cta}</span><span>${info.action}</span></div>
 
+    ${hyLvl >= 1 ? riverHtml(d.hydro) : ''}
+
     ${hyLvl < 3 && ev.txt && !/^Ráfagas/.test(ev.txt) ? `<div class="event ${ev.big ? 'big' : ''}">⏱ ${ev.txt}</div>` : ''}
 
     ${hyLvl >= 3 ? '' : windHtml(d)}
 
-    ${timelineHtml(d)}
+    ${hyLvl >= 3 ? '' : timelineHtml(d)}
 
     ${hyLvl >= 3 ? '' : tilesHtml(d)}
 
-    <div class="now">
+    ${hyLvl >= 3 ? '' : `<div class="now">
       <span>Ahora <b>${nowBits || '—'}</b></span>
       <span style="font-size:11.5px;color:#7d90b3">${d.ens ? d.ens.n + ' escenarios' : ''}</span>
-    </div>
+    </div>`}
 
 
     <details class="more">
@@ -1111,6 +1113,99 @@ function timelineHtml(d) {
     </div>`;
   }
   return out + '</div>';
+}
+
+/* ---- bloque de seguimiento del río: cómo viene, dónde está y qué se espera ---- */
+function riverSpark(h) {
+  if (!h.hist || h.hist.length < 3 || !h.gauge) return '';
+  const g = h.gauge;
+  /* escala propia de la serie: así se ve el cambio real de las últimas 2 semanas */
+  const vals = h.hist.map(p => p[1]);
+  if (g.al != null) vals.push(g.al);
+  if (g.ev != null) vals.push(g.ev);
+  const lo = Math.min(...vals) - 0.25;
+  const hi = Math.max(...vals) + 0.25;
+  const span = Math.max(0.1, hi - lo);
+  const W = 300, H = 66, pad = 8;
+  const y = v => {
+    const t = Math.max(0, Math.min(1, (v - lo) / span));
+    return H - pad - t * (H - pad * 2);
+  };
+  const n = h.hist.length;
+  const pts = h.hist.map((p, i) =>
+    ((i / (n - 1)) * (W - 6) + 3).toFixed(1) + ',' + y(p[1]).toFixed(1)
+  ).join(' ');
+
+  const dash = [];
+  if (g.al != null) dash.push(`<line x1="0" x2="${W}" y1="${y(g.al).toFixed(1)}" y2="${y(g.al).toFixed(1)}" class="rth"/>`);
+  if (g.ev != null) dash.push(`<line x1="0" x2="${W}" y1="${y(g.ev).toFixed(1)}" y2="${y(g.ev).toFixed(1)}" class="rth ev"/>`);
+
+  const lastV = h.hist[n - 1][1];
+  const lx = W - 3, ly = y(lastV).toFixed(1);
+
+  return `<svg class="rspark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+      role="img" aria-label="Nivel del río en los últimos ${n} días">
+    ${dash.join('')}
+    <polyline points="${pts}" class="rline"/>
+    <circle cx="${lx}" cy="${ly}" r="3.5" class="rdot"/>
+  </svg>`;
+}
+
+function riverHtml(h) {
+  if (!h || !h.gauge || h.now == null) return '';
+  const g = h.gauge;
+  const span = Math.max(0.1, g.max - g.min);
+  const pos = v => Math.max(0, Math.min(100, ((v - g.min) / span) * 100));
+  const f1 = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
+
+  const tr = h.trend || {};
+  const tcls = tr.key === 'baja' ? 'baja' : tr.key === 'estable' ? 'estable' : 'sube';
+  const rate = Math.abs(h.slope || 0);
+  const ttxt = tr.key === 'estable'
+    ? '➡ Sin cambios'
+    : (tr.arrow || '') + ' ' + f1(rate) + ' m/día';
+
+  /* la barra: tramo habitual, tramo de alerta y tramo de evacuación */
+  let zones = `<div class="rzone ok" style="width:100%"></div>`;
+  if (g.al != null) {
+    const pa = pos(g.al);
+    const pe = g.ev != null ? pos(g.ev) : 100;
+    zones = `<div class="rzone ok" style="width:${pa}%"></div>` +
+      `<div class="rzone warn" style="left:${pa}%;width:${Math.max(0, pe - pa)}%"></div>` +
+      (g.ev != null ? `<div class="rzone bad" style="left:${pe}%;width:${Math.max(0, 100 - pe)}%"></div>` : '');
+  }
+
+  const marks = [`<i class="rmark" style="left:${pos(g.now)}%"></i>`];
+  /* leyenda en fila: nunca se pisa, aunque los umbrales estén juntos */
+  const leg = [`<span><i class="lg ok"></i>normal</span>`];
+  if (g.al != null) leg.push(`<span><i class="lg warn"></i>alerta ${f1(g.al)} m</span>`);
+  if (g.ev != null) leg.push(`<span><i class="lg bad"></i>evacuación ${f1(g.ev)} m</span>`);
+
+  const day = String(h.date || '').slice(8, 10);
+  const mon = String(h.date || '').slice(5, 7);
+  const when = day ? `Medido el ${day}/${mon}` : '';
+
+  return `<div class="river ${tr.key || 'estable'}">
+    <div class="rtop">
+      <span class="rnow">${f1(h.now)} m</span>
+      <span class="rtrend ${tcls}">${ttxt}</span>
+    </div>
+
+    <div class="rgauge" role="img" aria-label="El agua está en ${f1(g.now)} metros">
+      ${zones}${marks.join('')}
+    </div>
+    <div class="rleg">${leg.join('')}</div>
+
+    ${riverSpark(h)}
+    <div class="rfoot">
+      <span>Últimos ${(h.hist || []).length || 14} días</span>
+      ${when ? `<span>${when}</span>` : ''}
+    </div>
+
+    ${h.proj48 != null && h.slope >= 0.15
+      ? `<div class="rproj">Si sigue así, en 2 días podría llegar a ${f1(h.proj48)} m.</div>` : ''}
+    ${h.peakTxt ? `<div class="rpeak">✅ ${esc(h.peakTxt)}</div>` : ''}
+  </div>`;
 }
 
 function hydroHtml(d, p) {
@@ -1252,7 +1347,7 @@ function hydroBanner() {
   const tone = lv >= 4 ? 'floodb4' : lv === 3 ? 'floodb3' : lv === 2 ? 'floodb2' : 'floodb1';
   const title = (h.headline || 'Crecida cerca') + ' · ' + p.label;
   /* en el banner va lo justo: dónde y cuánto. El resto está en la tarjeta. */
-  const first = String(h.detail || '').split('. ')[0];
+  const first = h.measured || String(h.detail || '').split('. ')[0];
   const sub = [h.river, first].filter(Boolean).join(' · ');
 
   return `<div class="banner ${tone}">

@@ -484,7 +484,7 @@ async function inaSeries(env, st) {
 
 /* nivel de hoy + tendencia de los últimos días */
 async function inaNow(env, seriesId) {
-  const key = `ina:now:v2:${seriesId}`;
+  const key = `ina:now:v3:${seriesId}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 45 * 60 * 1000) return hit;
 
@@ -508,14 +508,31 @@ async function inaNow(env, seriesId) {
 
   const last = rows[rows.length - 1];
   const back = n => rows[Math.max(0, rows.length - 1 - n)].v;
+  const d1 = rows.length > 1 ? last.v - back(1) : 0;
   const d3 = rows.length > 3 ? last.v - back(3) : 0;
   const d7 = rows.length > 7 ? last.v - back(7) : 0;
   const rd = v => Math.round(v * 100) / 100;
+  const slope = rows.length > 3 ? d3 / 3 : 0;
+
+  /* ¿sube, se quedó quieto o baja? */
+  const trend = slope >= 0.10 ? { key: 'sube', word: 'subiendo rápido', arrow: '⬆' }
+    : slope >= 0.03 ? { key: 'sube', word: 'subiendo', arrow: '⬆' }
+      : slope > -0.03 ? { key: 'estable', word: 'estable', arrow: '➡' }
+        : slope > -0.10 ? { key: 'baja', word: 'bajando', arrow: '⬇' }
+          : { key: 'baja', word: 'bajando rápido', arrow: '⬇' };
+
+  /* pico de las últimas 2 semanas: sirve para decir "lo peor ya pasó" */
+  const win = rows.slice(-14);
+  let peak = win[0];
+  win.forEach(r => { if (r.v > peak.v) peak = r; });
 
   const out = {
     at: Date.now(), now: rd(last.v), date: last.d,
-    d3: rd(d3), d7: rd(d7),
-    slope: rows.length > 3 ? Math.round((d3 / 3) * 1000) / 1000 : 0,
+    d1: rd(d1), d3: rd(d3), d7: rd(d7),
+    slope: Math.round(slope * 1000) / 1000,
+    trend,
+    peak: { v: rd(peak.v), date: peak.d },
+    hist: win.map(r => [String(r.d).slice(5, 10), rd(r.v)]),
     n: rows.length
   };
   await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
@@ -563,43 +580,67 @@ function hydroWords(level, o) {
   };
   const [headline, line, advice] = T[level] || T[0];
 
-  /* detalle concreto: cuánto mide, cómo viene y cuándo pasó algo parecido */
-  let detail = '';
-  if (r != null) {
-    const refs = [];
-    if (al != null) refs.push('alerta ' + fmtM(al));
-    if (ev != null) refs.push('evacuación ' + fmtM(ev));
-    detail = 'Hoy el agua está en ' + fmtM(r) +
-      (refs.length ? ' (' + refs.join(' · ') + ')' : '') + '.';
-  }
+  /* --- piezas sueltas, para que la interfaz las acomode y no sea un ladrillo --- */
+  const measured = r != null
+    ? 'Hoy el agua está en ' + fmtM(r) +
+      (() => {
+        const refs = [];
+        if (al != null) refs.push('alerta ' + fmtM(al));
+        if (ev != null) refs.push('evacuación ' + fmtM(ev));
+        return refs.length ? ' (' + refs.join(' · ') + ')' : '';
+      })() + '.'
+    : '';
 
-  /* ¿hacía cuánto que no había tanta agua? (dato que más pesa, va primero) */
+  /* ¿hacía cuánto que no había tanta agua? */
+  let history = '';
   if (r != null && Array.isArray(o.above) && o.above.length) {
     const prev = o.above.filter(x => x[1] >= r && x[0] < o.today);
     if (!prev.length) {
-      detail += ' No se veía un nivel así en toda la serie de la estación.';
+      history = 'No se veía un nivel así en toda la serie de la estación.';
     } else {
       const yr = prev[prev.length - 1][0].slice(0, 4);
       if (Number(yr) <= new Date().getFullYear() - 3) {
-        detail += ' No se veía un nivel así desde ' + yr + '.';
+        history = 'No se veía un nivel así desde ' + yr + '.';
       }
     }
   }
 
-  const sl = o.slope || 0;
-  if (sl >= 0.05) {
-    const proj = r + sl * 2;
-    detail += ' Viene subiendo ' + fmtM(sl).replace(' m', '') + ' m por día' +
-      (sl >= 0.15 ? '; si sigue así, en 2 días podría llegar a ' + fmtM(proj) : '') + '.';
-  } else if (sl <= -0.05) {
-    detail += ' Ya está bajando.';
+  /* ¿el pico ya pasó? */
+  const today = String(o.today || '').slice(0, 10);
+  let peakTxt = '';
+  const peakAge = o.peak && o.peak.date && today
+    ? (new Date(today) - new Date(String(o.peak.date).slice(0, 10))) / 86400000
+    : 99;
+  if (o.peak && o.peak.date && String(o.peak.date).slice(0, 10) !== today &&
+      r != null && peakAge <= 7) {
+    const pd = String(o.peak.date).slice(0, 10);
+    const when = pd.slice(8, 10) + '/' + pd.slice(5, 7);
+    /* si todavía estamos en evacuación, no se puede decir "ya pasó" */
+    peakTxt = level >= 3
+      ? 'El pico fue el ' + when + ' con ' + fmtM(o.peak.v) + ', pero el agua sigue muy alta.'
+      : 'Lo peor ya pasó: el pico fue el ' + when + ' con ' + fmtM(o.peak.v) + '.';
   }
 
-  return { headline, line, advice, detail: detail.trim() };
+  /* tendencia en una línea corta */
+  const sl = o.slope || 0;
+  const abs = fmtM(Math.abs(sl)).replace(' m', '');
+  let trendTxt = '';
+  if (o.trend && o.trend.key === 'sube') {
+    trendTxt = 'Está subiendo ' + abs + ' m por día' +
+      (sl >= 0.15 ? '; si sigue así, en 2 días podría llegar a ' + fmtM(r + sl * 2) : '') + '.';
+  } else if (o.trend && o.trend.key === 'baja') {
+    trendTxt = 'Está bajando ' + abs + ' m por día.';
+  } else if (o.trend) {
+    trendTxt = 'Está estable, sin cambios grandes.';
+  }
+
+  const detail = [measured, history, peakTxt, trendTxt].filter(Boolean).join(' ');
+
+  return { headline, line, advice, detail, measured, history, peakTxt, trendTxt };
 }
 
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v9:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v11:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
@@ -682,13 +723,35 @@ async function hydroFor(env, lat, lon) {
 
     const w = hydroWords(out.level, {
       now: out.now, al: out.al, ev: out.ev, slope: out.slope,
-      above: src.above, today: String(obs.date).slice(0, 10)
+      above: src.above, today: String(obs.date).slice(0, 10),
+      trend: obs.trend, peak: obs.peak
     });
     out.headline = w.headline;
     out.plain = w.line;
     out.detail = w.detail;
+    out.measured = w.measured;
+    out.history = w.history;
+    out.peakTxt = w.peakTxt;
+    out.trendTxt = w.trendTxt;
     out.advice = w.advice;
     out.levelWord = ['normal', 'alto', 'alerta', 'evacuacion', 'grave'][out.level];
+
+    /* datos para el gráfico de la tarjeta */
+    out.trend = obs.trend;
+    out.peak = obs.peak;
+    out.hist = obs.hist;
+    out.d1 = obs.d1;
+    out.d3 = obs.d3;
+    out.d7 = obs.d7;
+    if (out.slope >= 0.05) out.proj48 = Math.round((out.now + out.slope * 2) * 100) / 100;
+    const ceiling = Math.max(
+      (out.ev != null ? out.ev : (out.al != null ? out.al : out.now)) + 1,
+      out.now + 0.4
+    );
+    out.gauge = {
+      min: 0, max: Math.round(ceiling * 100) / 100,
+      al: out.al, ev: out.ev, now: out.now
+    };
     out.river = (src.name || probe.n) +
       (probe.d != null ? ' (' + probe.d.toFixed(1).replace('.', ',') + ' km)' : '');
   } else {
@@ -850,8 +913,13 @@ async function runAlerts(env) {
           const hPrev = (rec.hydroLast && rec.hydroLast[hk]) || 0;
           const hQuiet = quietNow() && h.level < 2;
           rec.hydroAt = rec.hydroAt || {};
+          rec.hydroTrend = rec.hydroTrend || {};
           const hLastAt = rec.hydroAt[hk] || 0;
-          /* sube de nivel, o sigue en rojo/morado y ya pasaron 6 h */
+          const trendKey = (h.trend && h.trend.key) || '';
+          const prevTrend = rec.hydroTrend[hk] || '';
+          const trendChanged = trendKey && trendKey !== prevTrend;
+
+          /* 1) sube de nivel, o sigue en rojo/morado y ya pasaron 6 h */
           const hRepeat = h.level >= 3 && Date.now() - hLastAt >= 6 * 3600 * 1000;
           if (h.level >= 1 && (h.level > hPrev || hRepeat) && !hQuiet) {
             const L = LEVELS[h.level];
@@ -866,6 +934,32 @@ async function runAlerts(env) {
             if (r2 === 'gone') { gone = true; break; }
             if (r2 === 'ok') rec.hydroAt[hk] = Date.now();
           }
+
+          /* 2) el río dejó de subir: aviso de alivio, sin bajar la guardia */
+          if (trendChanged && trendKey === 'baja' && h.level >= 2 &&
+              prevTrend !== '' && !hQuiet) {
+            const r3 = await sendPush(
+              env, rec.sub,
+              `🌊 El río empezó a bajar · ${h.river || 'río cercano'}`,
+              `${h.trendTxt || ''} Sigue alto, pero ya no sube. ` +
+              `Todavía no vuelvas si saliste. Cerca de ${tag}.`,
+              'hydro-' + hk, 'flood', h.level
+            );
+            if (r3 === 'gone') { gone = true; break; }
+          }
+
+          /* 3) volvió a su nivel habitual */
+          if (hPrev >= 1 && h.level === 0 && !quietNow()) {
+            const r4 = await sendPush(
+              env, rec.sub,
+              `🟢 El río volvió a su nivel habitual · ${h.river || 'río cercano'}`,
+              `El agua bajó y la crecida terminó. Cerca de ${tag}.`,
+              'hydro-' + hk, 'flood', 0
+            );
+            if (r4 === 'gone') { gone = true; break; }
+          }
+
+          if (trendKey) rec.hydroTrend[hk] = trendKey;
           rec.hydroLast = rec.hydroLast || {};
           rec.hydroLast[hk] = h.level;
         }

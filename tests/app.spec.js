@@ -133,13 +133,27 @@ test('la respuesta trae cabeceras de seguridad', async ({ request }) => {
 
 
 
+const HIST = [
+  ['10-06', 5.00], ['10-07', 5.08], ['10-08', 5.29], ['10-09', 5.52],
+  ['10-10', 5.68], ['10-11', 5.82], ['10-12', 5.96], ['10-13', 5.98],
+  ['10-14', 6.28], ['10-15', 6.68], ['10-16', 7.30], ['10-17', 7.78],
+  ['10-18', 8.06], ['10-19', 8.17]
+];
+
 const HYDRO_ITATI = {
   level: 4, source: 'ina', now: 8.17, al: 6.8, ev: 7.5, p99: 7.64,
+  date: '2026-10-19T03:00:00.000Z',
   rain48: 0, river: 'Itatí (0,5 km)', station: { id: 17, name: 'Itatí', d: 0.5 },
   headline: 'Crecida grave',
-  plain: 'El agua ya pasó el nivel de evacuación y sigue alta.',
-  detail: 'Hoy el agua está en 8,17 m (alerta 6,80 m · evacuación 7,50 m).',
-  advice: 'Si estás en zona baja o cerca de la costa, salí ahora.'
+  plain: 'El agua ya pasó el nivel de evacuación y la zona baja está bajo agua.',
+  history: 'No se veía un nivel así desde 1998.',
+  advice: 'Si estás en zona baja o cerca de la costa, salí ahora.',
+  slope: 0.29, proj48: 8.75,
+  trend: { key: 'sube', word: 'subiendo rápido', arrow: '⬆' },
+  peak: { v: 8.17, date: '2026-10-19T03:00:00.000Z' },
+  hist: HIST,
+  gauge: { min: 0, max: 8.5, al: 6.8, ev: 7.5, now: 8.17 },
+  detail: 'Hoy el agua está en 8,17 m (alerta 6,80 m · evacuación 7,50 m).'
 };
 
 test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async ({ page }) => {
@@ -162,10 +176,46 @@ test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async 
   await expect(card).not.toContainText('Todo tranquilo');
   await expect(card).not.toContainText('Buen momento para estar afuera');
   await expect(card).toContainText('salí ahora');
-  await expect(card.locator('.hdetail')).toContainText('8,17 m');
+  await expect(card.locator('.hdetail')).toContainText('desde 1998');
+
+  // bloque de seguimiento: nivel, tendencia, escala y serie histórica
+  const river = card.locator('.river');
+  await expect(river).toBeVisible();
+  await expect(river.locator('.rnow')).toHaveText('8,17 m');
+  await expect(river.locator('.rtrend')).toContainText('0,29 m/día');
+  await expect(river.locator('.rmark')).toHaveCount(1);
+  await expect(river.locator('.rproj')).toContainText('8,75');
+  await expect(river.locator('.rspark polyline')).toHaveCount(1);
+  await expect(river.locator('.rleg')).toContainText('evacuación');
 
   // y el banner de arriba también
   await expect(page.getByText('Crecida grave · Casa')).toBeVisible();
+});
+
+test('cuando el río empieza a bajar lo dice, y marca el pico ya pasado', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+  await page.evaluate((h) => {
+    const hist = h.hist.map((p, i) => i >= h.hist.length - 2 ? [p[0], i === h.hist.length - 1 ? 7.90 : 8.06] : p);
+    S.data.t1.hydro = {
+      ...h, level: 2, now: 7.90, slope: -0.12, proj48: undefined,
+      headline: 'Alerta por crecida',
+      plain: 'El agua llegó al nivel de alerta: ya empieza a entrar en las zonas bajas y a cortar caminos.',
+      history: '',
+      trend: { key: 'baja', word: 'bajando', arrow: '⬇' },
+      peak: { v: 8.20, date: '2026-10-18T03:00:00.000Z' },
+      peakTxt: 'Lo peor ya pasó: el pico fue el 18/10 con 8,20 m.',
+      hist,
+      gauge: { ...h.gauge, now: 7.90 }
+    };
+    paint();
+  }, HYDRO_ITATI);
+
+  const river = page.locator('.hero.flood2 .river');
+  await expect(river.locator('.rtrend')).toContainText('0,12 m/día');
+  await expect(river.locator('.rtrend')).toHaveClass(/baja/);
+  await expect(river.locator('.rpeak')).toContainText('Lo peor ya pasó');
+  await expect(river.locator('.rproj')).toHaveCount(0);
 });
 
 test('con el río en alerta el clima tranquilo se aclara, no se esconde', async ({ page }) => {
