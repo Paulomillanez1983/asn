@@ -170,14 +170,30 @@ function aggregate(H, ens) {
   /* granizo: proxy con CAPE, ráfaga y nivel de congelamiento. Nunca sube nivel solo. */
   const hailPossible = capeMax >= 1500 && gustMax >= 70 && freezing >= 3000 && freezing <= 4500;
 
+  /* nieve real: acumulado previsto en cm (no hay simulación) */
+  const snowSeries = seriesByBase(H, 'snowfall');
+  const snowHours = [];
+  for (let i = 0; i < 13; i++) {
+    snowHours.push(snowSeries.reduce((m, s) => Math.max(m, s[i] ?? 0), 0));
+  }
+  const snow3 = snowHours.slice(0, 3).reduce((a, b) => a + b, 0);
+  if (snow3 >= 5) level = 3;
+  else if (snow3 >= 2) level = Math.max(2, level);
+  else if (snow3 >= 0.2) level = Math.max(1, level);
+
   return {
     models, level: Math.min(3, level), detLevel, eLevel, votes,
-    capeMax, gustMax, freezing, storm, hailPossible, ens
+    capeMax, gustMax, freezing, storm, hailPossible, ens, snow3, snowHours
   };
 }
 
 /* ===================== Lenguaje humano ===================== */
 function levelInfo(d) {
+  if (d.snow3 >= 0.5) {
+    if (d.level >= 3) return { cls: 'lv3', emoji: '❄️', title: 'Nevada fuerte', line: 'Se espera nieve acumulada en tu zona.', action: 'Evitá salir en auto. Abrigate bien.', cta: '🚨' };
+    if (d.level === 2) return { cls: 'lv2', emoji: '🌨️', title: 'Puede nevar', line: 'Hay chances de nieve en las próximas 3 horas.', action: 'Si tenés que salir, hacelo con cuidado.', cta: '⚠️' };
+    return { cls: 'lv1', emoji: '🌨️', title: 'Puede caer nieve', line: 'Se espera algo de nieve en las próximas 3 horas.', action: 'Abrigate y seguí el pronóstico.', cta: '☂️' };
+  }
   const rain = d.votes.rain >= 2, wind = d.votes.wind >= 2;
   let what = rain ? 'lluvia' : wind ? 'ráfagas fuertes' : 'viento';
   if (d.storm) what = 'tormenta eléctrica';
@@ -210,6 +226,7 @@ function hourSignal(d, i) {
 function nextEvent(d) {
   const n = Math.min(12, d.times.length);
   for (let i = 0; i < n; i++) {
+    if (d.snowHours && d.snowHours[i] >= 0.1) return { iso: d.times[i], label: 'Nieve' };
     const s = hourSignal(d, i);
     if (s.rain || s.gust >= 50) {
       const both = s.rain && s.gust >= 50;
@@ -256,7 +273,7 @@ async function fetchPlace(p) {
   const u = new URL('https://api.open-meteo.com/v1/forecast');
   u.searchParams.set('latitude', p.lat);
   u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height');
+  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth');
   u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
   u.searchParams.set('models', MODELS.join(','));
   u.searchParams.set('forecast_hours', '13');
@@ -456,6 +473,7 @@ function probHtml(d) {
     'ráfagas ≥60 km/h <b>' + pc(d.ens.gust60) + '</b>'
   ];
   if (d.hailPossible) bits.push('<b>posible granizo</b>');
+  if (d.snow3 >= 0.2) bits.push('nieve <b>' + d.snow3.toFixed(1) + ' cm</b>');
   return `<div class="prob">${d.ens.n} de 51 escenarios: ${bits.join(' · ')}</div>`;
 }
 

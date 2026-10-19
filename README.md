@@ -23,6 +23,9 @@ Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, 
 | Ráfagas | P(≥60 km/h) ≥ 40 % | P(≥80 km/h) ≥ 40 % | P(≥100 km/h) ≥ 30 % |
 | Tormenta eléctrica | CAPE ≥ 1000 J/kg **y** P(lluvia ≥ 10 mm) ≥ 30 % | — | — |
 | Granizo | etiqueta "posible granizo" (CAPE ≥ 1500, ráfaga ≥ 70 km/h, nivel de congelamiento 3000–4500 m) | | |
+| Nieve (cm en 3 h) | ≥ 0,2 cm | ≥ 2 cm | ≥ 5 cm |
+
+**La nieve no es un ejemplo:** se calcula con las variables `snowfall` (cm) y `snow_depth` (m) de Open-Meteo, alimentadas por el IFS. En Córdoba es poco frecuente pero real: la última nevada en la capital fue el 16 de junio de 2021 y, según registros históricos recogidos por La Voz, las nevadas en la ciudad sólo habían ocurrido en julio, agosto y septiembre ([La Voz, 28/06/2025](https://www.lavoz.com.ar/ciudadanos/la-ola-polar-trajo-frio-extremo-y-altas-chances-de-nieve-incluso-en-la-ciudad-de-cordoba_0_oZC8NgiZ77.html)).
 
 Además se calculan los cuatro modelos determinísticos (ECMWF, GFS, ICON, GEM) como control: si el ensemble y el determinístico difieren en más de un nivel, se baja uno y se muestra el rango.
 
@@ -65,4 +68,6 @@ El repositorio no contiene direcciones, teléfonos ni coordenadas. Los lugares s
 
 ## Límites
 
-No reemplaza un servicio meteorológico oficial ni las indicaciones de Defensa Civil. El granizo es el fenómeno más difícil: la app lo marca como "posible", nunca como certeza, porque sin radar propio no hay forma de confirmarlo.
+No reemplaza tu criterio. El granizo es el fenómeno más difícil: la app lo marca como "posible", nunca como certeza, porque sin radar propio no hay forma de confirmarlo. Si el cielo se pone feo, abrí el radar desde "Ver detalles".
+
+Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-Meteo; RainViewer; Blitzortung). No se usan datos de organismos provinciales ni nacionales: no publican verificación estación por estación ni endpoints utilizables.
