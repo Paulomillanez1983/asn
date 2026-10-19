@@ -165,7 +165,7 @@ test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async 
   }, HYDRO_ITATI);
 
   // encabezado: la crecida manda sobre el clima tranquilo
-  await expect(page.locator('#sub')).toContainText('Crecida grave en un lugar');
+  await expect(page.locator('#sub')).toContainText('Alerta Super Niño · Crecida grave');
 
   const card = page.locator('.hero.flood4');
   await expect(card).toHaveCount(1);

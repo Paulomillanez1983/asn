@@ -16,6 +16,9 @@
 /icon-maskable-512.png
   Cache-Control: public, max-age=0, must-revalidate
 
+/logo-mark.svg
+  Cache-Control: public, max-age=0, must-revalidate
+
 /app.js
   Cache-Control: public, max-age=0, must-revalidate
 

@@ -1,5 +1,5 @@
-﻿const CACHE = 'asn-v57';
-const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=3', 'icon-512.png?v=3'];
+﻿const CACHE = 'asn-v59';
+const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4', 'logo-mark.svg?v=5'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

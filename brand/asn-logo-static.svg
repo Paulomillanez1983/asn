@@ -58,6 +58,7 @@
 </defs>
 
 <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+<g>
 <circle cx="256" cy="256" r="212" fill="url(#halo)"/>
 
 <g clip-path="url(#inner)">
@@ -89,5 +90,6 @@
 
     <path d="M268 266 L240 308 H258 L248 342 L286 302 H268 L278 266 Z"/>
   </g>
+</g>
 </g>
 </svg>

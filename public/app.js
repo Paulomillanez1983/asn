@@ -374,6 +374,7 @@ function phenomenon(d) {
 function sirenaSvg(px) {
   const s = px || 26;
   return `<svg class="sirena" viewBox="0 0 48 48" width="${s}" height="${s}" aria-hidden="true" focusable="false">
+    <g transform="translate(24,28) scale(1.16) translate(-24,-28)">
     <circle class="sir-halo" cx="24" cy="28" r="15"/>
     <rect x="7" y="30" width="34" height="10" rx="3" fill="#22304a"/>
     <rect x="7" y="30" width="34" height="3" rx="1.5" fill="#42587c"/>
@@ -384,6 +385,7 @@ function sirenaSvg(px) {
       <path d="M24 30 L22.3 19.1 A11 11 0 0 1 25.7 19.1 Z" fill="#FFF4F1" opacity=".66"/>
     </g>
     <rect x="17" y="40" width="14" height="3" rx="1.5" fill="#18213a"/>
+    </g>
   </svg>`;
 }
 
@@ -401,7 +403,7 @@ function levelInfo(d) {
       line: (h.plain || 'El río está alto.') + tail,
       detail: h.history || '',
       action: h.advice || 'Seguí el aviso si estás cerca de la costa.',
-      cta: lv >= 3 ? sirenaSvg(26) : '🌊',
+      cta: lv >= 3 ? sirenaSvg(34) : '🌊',
       pill: pills[lv]
     };
   }
@@ -879,12 +881,13 @@ function paint() {
             : 'Actualizando…';
 
   if (hydroWorst >= 1 && hydroWorst >= worst) {
-    msg = hydroWorst >= 4 ? 'Crecida grave en un lugar'
-      : hydroWorst === 3 ? 'Evacuación por crecida en un lugar'
-        : hydroWorst === 2 ? 'Alerta por crecida en un lugar'
-          : 'Río alto en un lugar';
+    msg = hydroWorst >= 4 ? 'Crecida grave'
+      : hydroWorst === 3 ? 'Evacuación por crecida'
+        : hydroWorst === 2 ? 'Alerta por crecida'
+          : 'Río alto';
   }
-  sub.textContent = msg + (S.busy ? ' · actualizando' : ' · ' + ago(S.updated));
+  /* el nombre va siempre: es la marca, y el estado se suma detrás */
+  sub.textContent = 'Alerta Super Niño · ' + msg + (S.busy ? ' · actualizando' : '');
 
   if (S.view === 'settings') view.innerHTML = viewSettings();
   else if (S.view === 'add') { /* la vista se arma aparte */ }
@@ -1368,7 +1371,7 @@ function hydroBanner() {
   const sub = [h.river, first].filter(Boolean).join(' · ');
 
   return `<div class="banner ${tone}">
-    <div class="bi">${lv >= 3 ? sirenaSvg(30) : '🌊'}</div>
+    <div class="bi">${lv >= 3 ? sirenaSvg(40) : '🌊'}</div>
     <div class="bt"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
   </div>`;
 }

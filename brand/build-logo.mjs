@@ -43,7 +43,7 @@ const BOLT = 'M268 266 L240 308 H258 L248 342 L286 302 H268 L278 266 Z';
 const conePath = `M${C} ${C} L${pt(R - 20, -32)[0].toFixed(1)} ${pt(R - 20, -32)[1].toFixed(1)}
   A${R - 20} ${R - 20} 0 0 1 ${pt(R - 20, 10)[0].toFixed(1)} ${pt(R - 20, 10)[1].toFixed(1)} Z`;
 
-const svg = (animated, rounded = true, beam = animated) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+const svg = (animated, rounded = true, beam = animated, zoom = 1) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
 <defs>
   <radialGradient id="bg" cx="50%" cy="34%" r="78%">
     <stop offset="0" stop-color="#12213f"/>
@@ -103,6 +103,7 @@ const svg = (animated, rounded = true, beam = animated) => `<svg xmlns="http://w
 </defs>
 
 <rect width="512" height="512"${rounded ? ' rx="96"' : ''} fill="url(#bg)"/>
+<g${zoom !== 1 ? ` transform="translate(256,256) scale(${zoom}) translate(-256,-256)"` : ''}>
 <circle cx="${C}" cy="${C}" r="212" fill="url(#halo)"/>
 
 <g clip-path="url(#inner)">
@@ -135,10 +136,13 @@ const svg = (animated, rounded = true, beam = animated) => `<svg xmlns="http://w
     <path d="${BOLT}"/>
   </g>
 </g>
+</g>
 </svg>`;
 
 fs.writeFileSync(path.join(OUT, 'asn-logo.svg'), svg(true, true));
 fs.writeFileSync(path.join(OUT, 'asn-logo-static.svg'), svg(false, true));
+/* marca animada que usa el encabezado de la app */
+fs.writeFileSync(path.resolve('public', 'logo-mark.svg'), svg(true, true, true, 1.16));
 
 /* ---------- render ---------- */
 const FPS = 25, SECS = 4, SIZE = 512;
@@ -162,6 +166,21 @@ await bigPage.setContent(
 );
 await bigPage.waitForTimeout(150);
 await bigPage.screenshot({ path: path.join(OUT, 'asn-logo-1024-flat.png') });
+
+/* iconos: la marca ocupa más lugar dentro del cuadrado, para que no se vea chica
+   al lado de las otras apps del teléfono */
+const iconVariants = [
+  ['asn-icon-1024.png', 1.16, true],           // propósito "any"
+  ['asn-icon-maskable-1024.png', 1.08, false]  // maskable / iOS: opaco y más conservador
+];
+for (const [name, z, round] of iconVariants) {
+  await bigPage.setContent(
+    `<html><body style="margin:0;background:#050a14"><div style="width:${SIZE}px;height:${SIZE}px">${svg(false, round, false, z)}</div></body></html>`,
+    { waitUntil: 'load' }
+  );
+  await bigPage.waitForTimeout(120);
+  await bigPage.screenshot({ path: path.join(OUT, name), omitBackground: round });
+}
 await big.close();
 
 /* frames animados, a sangre (sin esquinas redondeadas) para video y gif */

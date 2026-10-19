@@ -7,8 +7,10 @@ import { execFileSync } from 'node:child_process';
 
 const OUT = path.resolve('brand');
 const PUB = path.resolve('public');
-const r = path.join(OUT, 'asn-logo-1024.png');        // esquinas redondeadas + transparencia
-const f = path.join(OUT, 'asn-logo-1024-flat.png');   // a sangre, opaco
+const r = path.join(OUT, 'asn-logo-1024.png');           // redondeado + transparencia
+const f = path.join(OUT, 'asn-logo-1024-flat.png');      // a sangre, opaco
+const icon = path.join(OUT, 'asn-icon-1024.png');        // marca más grande, "any"
+const mask = path.join(OUT, 'asn-icon-maskable-1024.png'); // marca más grande, opaco
 
 const ff = (args) => execFileSync('ffmpeg', ['-y', ...args], { stdio: 'ignore' });
 
@@ -17,16 +19,11 @@ ff(['-i', r, '-frames:v', '1', '-pix_fmt', 'rgba', path.join(OUT, 'asn-logo-merc
 ff(['-i', f, '-frames:v', '1', '-q:v', '2', path.join(OUT, 'asn-logo-mercadopago-1024.jpg')]);
 
 /* --- iconos de la app --- */
-const rounded = [
-  ['icon-512.png', 512],
-  ['icon-192.png', 192]
-];
-for (const [name, px] of rounded) {
-  ff(['-i', r, '-vf', `scale=${px}:${px}:flags=lanczos`, '-frames:v', '1', path.join(PUB, name)]);
+for (const [name, px] of [['icon-512.png', 512], ['icon-192.png', 192]]) {
+  ff(['-i', icon, '-vf', `scale=${px}:${px}:flags=lanczos`, '-frames:v', '1', path.join(PUB, name)]);
 }
-/* iOS y maskable van opacos y sin esquinas: el sistema aplica su propia máscara */
 for (const [name, px] of [['apple-touch-icon.png', 180], ['icon-maskable-512.png', 512]]) {
-  ff(['-i', f, '-vf', `scale=${px}:${px}:flags=lanczos`, '-frames:v', '1', path.join(PUB, name)]);
+  ff(['-i', mask, '-vf', `scale=${px}:${px}:flags=lanczos`, '-frames:v', '1', path.join(PUB, name)]);
 }
 
 console.log('iconos listos');
