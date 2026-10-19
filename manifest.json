@@ -1,0 +1,21 @@
+{
+  "id": "/alerta-meteo-cordoba/",
+  "name": "Alerta Meteo Córdoba",
+  "short_name": "AlertaMeteo",
+  "description": "Avisos de lluvia, ráfagas y granizo para tus lugares, con cuatro modelos meteorológicos.",
+  "lang": "es-AR",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "categories": ["weather", "utilities"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
