@@ -320,7 +320,9 @@ function viewEmpty() {
 
 function viewHome() {
   const ordered = [...S.places].sort((a, b) => (levelOf(b) - levelOf(a)) || a.name.localeCompare(b.name));
-  return ordered.map(heroHtml).join('') + `<div class="foot" style="margin-top:14px">Tocá “Ver detalles” si querés los datos finos.</div>`;
+  const add = `<button class="ghost" id="addPlace" style="width:100%;margin:4px 0 2px">＋ Agregar otro lugar</button>`;
+  return ordered.map(heroHtml).join('') + add +
+    `<div class="foot" style="margin-top:16px">Tocá “Ver detalles” si querés los datos finos.</div>`;
 }
 
 function heroHtml(p) {
