@@ -504,6 +504,7 @@ function paint() {
   if (gear) gear.textContent = S.view === 'settings' ? '✕' : '⚙️';
 
   if (!S.places.length) {
+    if (S.view === 'install') { view.innerHTML = viewInstall(); return; }
     sub.textContent = 'Alerta Super Niño 4.0';
     view.innerHTML = viewEmpty();
     return;
