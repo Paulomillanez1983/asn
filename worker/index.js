@@ -356,19 +356,28 @@ async function riversNear(env, lat, lon) {
 }
 
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v3:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v4:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
   const out = { at: Date.now(), level: 0, q: null, p90: null, p95: null, rain48: 0, stations: [], river: null, msg: '' };
 
+  let riverPoint = null;
   try {
-    const u = `https://flood-api.open-meteo.com/v1/flood?latitude=${lat}&longitude=${lon}` +
-      '&daily=river_discharge&past_days=30&forecast_days=3';
+    const cachedRivers = await env.SUBS.get(`rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`, 'json');
+    if (cachedRivers && cachedRivers.length) riverPoint = cachedRivers[0];
+  } catch (e) { }
+
+  const qLat = riverPoint ? riverPoint.lat : lat;
+  const qLon = riverPoint ? riverPoint.lon : lon;
+
+  try {
+    const u = `https://flood-api.open-meteo.com/v1/flood?latitude=${qLat}&longitude=${qLon}` +
+      '&daily=river_discharge&past_days=92&forecast_days=3';
     const j = await (await fetch(u)).json();
     const arr = (j.daily && j.daily.river_discharge) || [];
-    const past = arr.slice(0, 30).filter(v => v != null);
-    const q = arr[29] != null ? arr[29] : null;
+    const past = arr.slice(0, 92).filter(v => v != null);
+    const q = arr[92] != null ? arr[92] : (past.length ? past[past.length - 1] : null);
     out.q = q;
     out.p90 = percentile(past, 0.9);
     out.p95 = percentile(past, 0.95);
@@ -390,14 +399,10 @@ async function hydroFor(env, lat, lon) {
 
   try { out.stations = await inaNear(env, lat, lon); } catch (e) { }
   const st = out.stations[0];
-  out.river = st && st.r ? st.r : 'Río cercano';
-
-  try {
-    const cachedRivers = await env.SUBS.get(`rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`, 'json');
-    if (cachedRivers && cachedRivers.length) {
-      out.river = cachedRivers[0].name + ' (' + cachedRivers[0].d + ' km)';
-    }
-  } catch (e) { }
+  out.river = riverPoint
+    ? riverPoint.name + ' (' + riverPoint.d + ' km)'
+    : (st && st.r ? st.r : 'Río cercano');
+  out.riverPoint = riverPoint ? { lat: riverPoint.lat, lon: riverPoint.lon } : null;
 
   const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
   let score = 0;
@@ -572,6 +577,7 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
 
 
 

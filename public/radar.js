@@ -116,7 +116,13 @@
     let hits = 0;
     for (let i = 3; i < px.length; i += 4) if (px[i] > 12) hits++;
 
-    if (hits < 500) return buildModel(place, level, phen, 'sin eco de radar');
+    if (hits < 500) {
+      try {
+        return await buildSatellite(place, level, phen);
+      } catch (e) {
+        return buildModel(place, level, phen, 'sin eco de radar');
+      }
+    }
 
     const gif = GIFEncoder();
     const cv = document.createElement('canvas');
@@ -143,6 +149,91 @@
         sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
         stamp: 'ASN 4.0 · radar ' + hhmm(f.time),
         foot: 'RainViewer · Open-Meteo'
+      });
+      encode(gif, ctx);
+    }
+
+    gif.finish();
+    return new Blob([gif.bytes()], { type: 'image/gif' });
+  }
+
+  function gibsUrl(time, x, y) {
+    return 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/' +
+      time + '/GoogleMapsCompatible_Level7/' + Z + '/' + y + '/' + x + '.png';
+  }
+
+  async function latestGibsTime(x, y) {
+    const now = Date.now();
+    for (let k = 1; k <= 14; k++) {
+      const d = new Date(now - k * 10 * 60 * 1000);
+      d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
+      const iso = d.toISOString().replace('.000Z', 'Z');
+      try {
+        const r = await fetch(gibsUrl(iso, x, y), { method: 'GET' });
+        if (r.ok) return iso;
+      } catch (e) { }
+    }
+    return null;
+  }
+
+  async function buildSatellite(place, level, phen) {
+    const c = project(place.lat, place.lon, Z);
+    const left = c.x - W / 2, top = c.y - H / 2;
+    const x0 = Math.floor(left / TILE), y0 = Math.floor(top / TILE);
+    const x1 = Math.floor((left + W) / TILE), y1 = Math.floor((top + H) / TILE);
+    const cx = Math.floor(c.x / TILE), cy = Math.floor(c.y / TILE);
+
+    const latest = await latestGibsTime(cx, cy);
+    if (!latest) throw new Error('satélite no disponible');
+
+    const base = new Date(latest).getTime();
+    const times = [];
+    for (let i = FRAMES - 1; i >= 0; i--) {
+      times.push(new Date(base - i * 10 * 60 * 1000).toISOString().replace('.000Z', 'Z'));
+    }
+
+    const gif = GIFEncoder();
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+
+    let prev = null;
+    let prevTime = null;
+    for (const time of times) {
+      const jobs = [];
+      for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+          jobs.push(loadImg(gibsUrl(time, x, y)).then(img => ({ img, x, y })).catch(() => null));
+        }
+      }
+      const loaded = await Promise.all(jobs);
+      const ok = loaded.filter(Boolean);
+
+      let stampTime = time;
+      if (!ok.length && prev) {
+        ctx.drawImage(prev, 0, 0);
+        stampTime = prevTime || time;
+      } else {
+        const bg = ctx.createLinearGradient(0, 0, 0, H);
+        bg.addColorStop(0, '#0a1626');
+        bg.addColorStop(1, '#060c16');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
+        loaded.forEach(it => { if (it) ctx.drawImage(it.img, it.x * TILE - left, it.y * TILE - top); });
+        if (ok.length) {
+          prev = document.createElement('canvas');
+          prev.width = W;
+          prev.height = H;
+          prev.getContext('2d').drawImage(cv, 0, 0);
+          prevTime = time;
+        }
+      }
+
+      frame(ctx, {
+        level, place,
+        sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
+        stamp: 'ASN 4.0 · satélite ' + stampTime.slice(11, 16) + ' UTC',
+        foot: 'GOES-East · NASA GIBS'
       });
       encode(gif, ctx);
     }
