@@ -215,7 +215,7 @@ function levelInfo(d) {
     return {
       cls: 'lv0', emoji: '😌', title: 'Todo tranquilo',
       line: 'No se espera nada raro en las próximas 3 horas.',
-      action: 'Buen momento para estar afuera.', cta: '✅', pill: 'próximas 3 h'
+      action: 'Buen momento para estar afuera.', cta: '✅', pill: '🟢 Sin alerta'
     };
   }
   const titles = {
@@ -1012,9 +1012,11 @@ function maybeOpenAsk() {
   let last = 0;
   try { last = Number(localStorage.getItem(ASK_KEY) || 0); } catch (e) { }
   if (Date.now() - last < 6 * 60 * 60 * 1000) return;
+  const sheet = document.getElementById('askSheet');
+  if (sheet && !sheet.hidden) return;
   const tutorial = document.getElementById('sheet');
-  if (tutorial && !tutorial.hidden) { setTimeout(maybeOpenAsk, 90000); return; }
-  if (!openAsk()) setTimeout(() => openAsk(), 8000);
+  if (tutorial && !tutorial.hidden) return;
+  openAsk();
 }
 
 /* Cruza el reporte del usuario con el radar de RainViewer (tiles con CORS) */
@@ -1093,7 +1095,6 @@ document.addEventListener('click', ev => {
         if (res) res.innerHTML = radarText(a, r) + '<br><span style="color:#7d90b3;font-size:12px">Cruzamos tu reporte con el radar y los modelos.</span>';
         const fb = S.feedback[S.feedback.length - 1];
         if (fb && !fb.radar) { fb.radar = r; save(); }
-        setTimeout(() => closeAsk(true), 4500);
       });
     } else {
       closeAsk(true);
@@ -1220,8 +1221,11 @@ function init() {
   try { seen = !!localStorage.getItem(INTRO_KEY); } catch (e) { }
   if (!seen) setTimeout(openSheet, 2500);
 
-  /* a los 20 s pregunta qué está pasando (máximo cada 6 h) */
-  setTimeout(() => maybeOpenAsk(), 20000);
+  /* a los 20 s pregunta qué está pasando; reintenta cada 15 s si aún no hay datos */
+  setTimeout(() => {
+    maybeOpenAsk();
+    setInterval(maybeOpenAsk, 15000);
+  }, 20000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
