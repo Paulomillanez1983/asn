@@ -114,3 +114,15 @@ No reemplaza tu criterio. El granizo es el fenómeno más difícil: la app lo ma
 
 Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-Meteo; RainViewer; Blitzortung). No se usan datos de organismos provinciales ni nacionales: no publican verificación estación por estación ni endpoints utilizables.
 
+
+## Calidad y seguridad
+
+- **9 tests E2E** con Playwright (`npm test`): carga, menú, rail con dos tarjetas, alineación de horas, día/noche, compartir según nivel, página de apoyo, OG del enlace y cabeceras de seguridad.
+- **CI** en cada push (`.github/workflows/ci.yml`): instala Chromium y corre la suite contra producción.
+- **CSP estricta**: `script-src 'self'`, sin scripts inline (el arranque vive en `boot.js`), `frame-ancestors 'none'`, `object-src 'none'`.
+- **Rate limiting** por IP en KV: hydro 60/10 min, ríos 30/10 min, suscripciones 20/10 min, prueba 10/10 min.
+- **Accesibilidad**: región `aria-live` para avisos, foco visible, `prefers-reduced-motion` y etiquetas por hora en la tira.
+
+### Hidrología: criterio de crecida
+
+Se compara el caudal con su **p95 de 92 días**: +15 % sobre el p95 → señal, +35 % → crecida. Si el INA publica umbral para la estación, se toma como referencia. La lluvia local sólo cuenta para cuencas chicas; el Paraná crece por lluvia a cientos de kilómetros.

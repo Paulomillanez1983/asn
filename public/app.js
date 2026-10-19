@@ -109,6 +109,8 @@ function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('on');
+  const live = document.getElementById('live');
+  if (live) live.textContent = msg;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove('on'), 2800);
 }
@@ -875,7 +877,7 @@ function viewHome() {
         : '');
   }
   const add = `<button class="ghost" id="addPlace" style="width:100%;margin:6px 0 2px">＋ Agregar otro lugar</button>`;
-  return travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
+  return hydroBanner() + travelBanner() + installBanner() + notifyBanner() + hydroAskBanner() + body + add +
     `<div class="foot" style="margin-top:16px">Deslizá las tarjetas para ver cada lugar.</div>`;
 }
 
@@ -1052,10 +1054,18 @@ function timelineHtml(d) {
     }
 
     const hi = avgP >= 0.2 || gust >= 50 || snow >= 0.1;
-    out += `<div class="tl${i === 0 ? ' cur' : ''}${hi ? ' hi' : ''}${night ? ' night' : ''}">
-      <div class="h">${hourLabel(d.times[i]).slice(0, 2)}</div>
-      <div class="e">${ico}</div>
-      <div class="b"><i style="width:${Math.max(6, Math.round(avgProb))}%"></i></div>
+    const hh = hourLabel(d.times[i]).slice(0, 2);
+    const cond = snow >= 0.1 ? 'nieve'
+      : (avgP >= 0.2 || avgProb >= 40) ? 'lluvia'
+        : gust >= 50 ? 'viento fuerte'
+          : avgCloud >= 70 ? 'nublado'
+            : avgCloud >= 25 ? 'parcialmente nublado' : 'despejado';
+
+    out += `<div class="tl${i === 0 ? ' cur' : ''}${hi ? ' hi' : ''}${night ? ' night' : ''}"
+      role="img" aria-label="${hh} horas, ${cond}${night ? ', de noche' : ''}">
+      <div class="h" aria-hidden="true">${hh}</div>
+      <div class="e" aria-hidden="true">${ico}</div>
+      <div class="b" aria-hidden="true"><i style="width:${Math.max(6, Math.round(avgProb))}%"></i></div>
     </div>`;
   }
   return out + '</div>';
@@ -1071,10 +1081,10 @@ function hydroHtml(d, p) {
       riverName = nearby[0].name + ' (' + nearby[0].d + ' km)';
     }
     if (!riverName) riverName = 'Río cercano';
-    const q = Number(h.q).toFixed(2);
-    const p90 = h.p90 != null ? Number(h.p90).toFixed(2) : '—';
+    const q = Number(h.q).toFixed(0);
+    const p95 = h.p95 != null ? Number(h.p95).toFixed(0) : '—';
     const tone = h.level === 0 ? 'normal' : h.level === 1 ? 'alto' : 'crecida';
-    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p90 ${p90} ·
+    rows.push(`<div class="prob hydro">🌊 <b>${esc(riverName)}</b> · caudal ${q} m³/s · p95 ${p95} ·
       lluvia 48 h ${h.rain48} mm · <b>${tone}</b></div>`);
   }
   const rivers = (p && S.rivers && S.rivers[p.id]) || [];
@@ -1180,6 +1190,17 @@ function travelBanner() {
     <div class="bt"><b>Estás en ${esc(label)}</b><span>${t.dist ? 'A ' + t.dist + ' km de tus lugares. ' : ''}Si seguís esta zona, te avisamos de lluvias, ráfagas y crecidas de acá.</span></div>
     <button data-travel="add">Seguir</button>
     <button class="x2" data-travel="skip" aria-label="Ahora no">✕</button>
+  </div>`;
+}
+
+function hydroBanner() {
+  const p = S.places.find(x => S.data[x.id] && S.data[x.id].hydro && S.data[x.id].hydro.level >= 1);
+  if (!p) return '';
+  const h = S.data[p.id].hydro;
+  const title = (h.level >= 2 ? 'Crecida posible' : 'Río alto') + ' cerca de ' + p.label;
+  return `<div class="banner warn">
+    <div class="bi">🌊</div>
+    <div class="bt"><b>${esc(title)}</b><span>${esc(h.river || '')} · ${Math.round(h.q)} m³/s · ${esc(h.msg || '')}</span></div>
   </div>`;
 }
 
@@ -2054,5 +2075,8 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+
+
 
 

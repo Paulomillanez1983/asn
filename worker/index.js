@@ -8,6 +8,16 @@ import { buildPushPayload } from '@block65/webcrypto-web-push';
 
 export default {
   async fetch(request, env, ctx) {
+    const res = await route(request, env, ctx);
+    return harden(res);
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runAlerts(env));
+  }
+};
+
+async function route(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/alerta/')) {
       try {
@@ -16,14 +26,6 @@ export default {
         return new Response('No pudimos generar la vista previa.', { status: 500 });
       }
     }
-    if (url.pathname === '/apoyar' || url.pathname === '/apoyar.html') {
-      const assetUrl = new URL('/apoyar.html', url.origin);
-      const r = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
-      const h = new Headers(r.headers);
-      h.set('cache-control', 'no-store');
-      return new Response(r.body, { status: r.status, headers: h });
-    }
-
     if (url.pathname === '/og.png' || url.pathname.startsWith('/og/')) {
       const res = await env.ASSETS.fetch(request);
       if (!res.ok) return res;
@@ -40,12 +42,7 @@ export default {
       }
     }
     return env.ASSETS.fetch(request);
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(runAlerts(env));
-  }
-};
+}
 
 /* ---------------- API ---------------- */
 function json(obj, status = 200) {
@@ -55,12 +52,59 @@ function json(obj, status = 200) {
   });
 }
 
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://tilecache.rainviewer.com https://gibs.earthdata.nasa.gov",
+  "connect-src 'self' https://api.open-meteo.com https://ensemble-api.open-meteo.com https://flood-api.open-meteo.com https://api.met.no https://photon.komoot.io https://nominatim.openstreetmap.org https://api.rainviewer.com https://gibs.earthdata.nasa.gov",
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "manifest-src 'self'",
+  "worker-src 'self'"
+].join('; ');
+
+function harden(res) {
+  const h = new Headers(res.headers);
+  h.set('content-security-policy', CSP);
+  h.set('x-content-type-options', 'nosniff');
+  h.set('referrer-policy', 'strict-origin-when-cross-origin');
+  h.set('permissions-policy', 'geolocation=(self), notifications=(self), camera=(), microphone=()');
+  h.set('x-frame-options', 'DENY');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+}
+
+async function limited(env, ip, bucket, limit, secs) {
+  const win = Math.floor(Date.now() / (secs * 1000));
+  const key = `rl:${bucket}:${ip}:${win}`;
+  const n = Number((await env.SUBS.get(key)) || 0) + 1;
+  await env.SUBS.put(key, String(n), { expirationTtl: secs + 30 });
+  return n > limit;
+}
+
 async function hash(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
 }
 
 async function api(req, env, url) {
+  const rules = {
+    '/api/hydro': [60, 'hydro'],
+    '/api/rivers': [30, 'rivers'],
+    '/api/subscribe': [20, 'sub'],
+    '/api/test': [10, 'test']
+  };
+  const rule = rules[url.pathname];
+  if (rule) {
+    const ip = req.headers.get('cf-connecting-ip') || 'anon';
+    if (await limited(env, ip, rule[1], rule[0], 600)) {
+      return json({ error: 'demasiadas solicitudes, probá en unos minutos' }, 429);
+    }
+  }
+
   if (url.pathname === '/api/vapid' && req.method === 'GET') {
     return json({ key: env.VAPID_PUBLIC });
   }
@@ -356,7 +400,7 @@ async function riversNear(env, lat, lon) {
 }
 
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v4:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v5:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await env.SUBS.get(key, 'json');
   if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
 
@@ -399,24 +443,33 @@ async function hydroFor(env, lat, lon) {
 
   try { out.stations = await inaNear(env, lat, lon); } catch (e) { }
   const st = out.stations[0];
-  out.river = riverPoint
-    ? riverPoint.name + ' (' + riverPoint.d + ' km)'
-    : (st && st.r ? st.r : 'Río cercano');
+  const inaName = st && st.r ? (String(st.r).toUpperCase().startsWith('PARANA') ? 'Paraná' : st.r) : null;
+
+  if (inaName && st.d != null && (!riverPoint || st.d <= riverPoint.d)) {
+    out.river = inaName + ' (' + st.d.toFixed(1) + ' km)';
+  } else if (riverPoint) {
+    out.river = riverPoint.name + ' (' + riverPoint.d + ' km)';
+  } else {
+    out.river = inaName || 'Río cercano';
+  }
   out.riverPoint = riverPoint ? { lat: riverPoint.lat, lon: riverPoint.lon } : null;
 
   const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
+  const ratio95 = (q != null && p95) ? q / p95 : 0;
   let score = 0;
   if (q != null && p90 && q >= p90) score += 1;
-  if (q != null && p95 && q >= p95 * 1.3) score += 2;
+  if (ratio95 >= 1.15) score += 2;
+  if (ratio95 >= 1.35) score += 1;
   if (out.rain48 >= 25) score += 1;
   if (q != null && p90 && q >= p90 * 1.5 && out.rain48 >= 15) score += 1;
   out.level = score >= 3 ? 2 : score >= 2 ? 1 : 0;
+  out.ratio95 = Math.round(ratio95 * 100) / 100;
 
   out.msg = out.level === 0
     ? 'Sin señal de crecida'
     : out.level === 1
       ? 'Caudal alto para la zona' + (out.rain48 >= 15 ? ' y lluvia reciente aguas arriba' : '')
-      : 'Posible crecida: caudal muy por encima de lo normal';
+      : 'Posible crecida: caudal ' + Math.round((ratio95 - 1) * 100) + ' % sobre el p95';
 
   await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
   return out;
@@ -577,6 +630,7 @@ async function runAlerts(env) {
     else await env.SUBS.put(k.name, JSON.stringify(rec));
   }
 }
+
 
 
 

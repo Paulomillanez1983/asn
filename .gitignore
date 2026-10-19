@@ -7,3 +7,6 @@ places.json
 node_modules
 .dev.vars
 .wrangler
+
+test-results
+playwright-report
