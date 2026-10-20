@@ -634,9 +634,13 @@ async function fetchRivers(p) {
 async function fetchHydro(p) {
   try {
     const r = await fetch('/api/hydro?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch (e) { return null; }
+    if (!r.ok) return { error: true };
+    const j = await r.json();
+    if (j && j.error) return { error: true };
+    return j;
+  } catch (e) {
+    return { error: true };
+  }
 }
 
 /* Amanecer y atardecer (pedido aparte, sin modelos) */
@@ -807,7 +811,9 @@ async function refresh() {
       agg.sunrise = (r.sun && r.sun.sunrise) || (r.det.daily && r.det.daily.sunrise) || null;
       agg.sunset = (r.sun && r.sun.sunset) || (r.det.daily && r.det.daily.sunset) || null;
       agg.met = r.met;
-      agg.hydro = r.hyd;
+      /* si el río no se pudo leer, se dice: nunca se muestra "tranquilo" sin dato */
+      agg.hydroErr = !!(r.hyd && r.hyd.error);
+      agg.hydro = r.hyd && !r.hyd.error ? r.hyd : null;
       applyLearning(p, agg);
       S.data[p.id] = agg;
       ok++;
@@ -953,6 +959,9 @@ function paint() {
   const alerts = S.places.filter(p => levelOf(p) >= 1).length;
   const hydroWorst = Math.max(0, ...S.places.map(p =>
     (S.data[p.id] && S.data[p.id].hydro && S.data[p.id].hydro.level) || 0));
+  /* el río sin dato no es "todo tranquilo": no se puede afirmar calma */
+  const hydroUnknown = hydroWorst === 0 &&
+    S.places.some(p => S.data[p.id] && S.data[p.id].hydroErr);
 
   let msg = worst >= 4 ? (alerts > 1 ? alerts + ' lugares en alerta morada' : 'Alerta morada en un lugar')
     : worst === 3 ? (alerts > 1 ? alerts + ' lugares en alerta roja' : 'Alerta roja en un lugar')
@@ -966,6 +975,8 @@ function paint() {
       : hydroWorst === 3 ? 'Evacuación por crecida'
         : hydroWorst === 2 ? 'Alerta por crecida'
           : 'Río alto';
+  } else if (hydroUnknown) {
+    msg = 'Sin dato del río';
   }
   /* el nombre va siempre: es la marca, y el estado se suma detrás */
   sub.textContent = 'Alerta Super Niño · ' + msg + (S.busy ? ' · actualizando' : '');
@@ -1108,6 +1119,7 @@ function heroHtml(p) {
       </span>
     </div>
     ${p.addr ? `<div class="addr">${esc(p.addr)}</div>` : ''}
+    ${!hyLvl && d.hydroErr ? `<div class="hywarn">⚠ No pudimos leer el nivel del río. El clima está tranquilo; del río no tenemos dato ahora.</div>` : ''}
 
     <div class="main">
       <div class="emoji">${info.emoji}</div>

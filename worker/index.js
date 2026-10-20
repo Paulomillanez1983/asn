@@ -77,14 +77,26 @@ function harden(res) {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }
 
+/* Límite por instancia, en memoria: suficiente para frenar abusos y
+   no gasta ni una escritura del almacenamiento. */
+const rlMem = new Map();
 async function limited(env, ip, bucket, limit, secs) {
   const win = Math.floor(Date.now() / (secs * 1000));
-  const key = `rl:${bucket}:${ip}:${win}`;
-  const n = Number((await env.SUBS.get(key)) || 0) + 1;
-  await env.SUBS.put(key, String(n), { expirationTtl: secs + 30 });
+  const key = `${bucket}:${ip}:${win}`;
+  const n = (rlMem.get(key) || 0) + 1;
+  if (rlMem.size > 4000) rlMem.clear();
+  rlMem.set(key, n);
   return n > limit;
 }
 
+/* La caché es opcional: si el almacenamiento rechaza la escritura
+   (cupo diario agotado), igual respondemos con el dato en vivo. */
+async function kvPut(env, key, val, opts) {
+  try {
+    if (opts) await env.SUBS.put(key, val, opts);
+    else await env.SUBS.put(key, val);
+  } catch (e) { }
+}
 async function hash(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
@@ -272,7 +284,7 @@ async function api(req, env, url) {
       ph: (prev && prev.ph) || {},
       hydroLast: (prev && prev.hydroLast) || {}
     };
-    await env.SUBS.put(key, JSON.stringify(rec));
+    await kvPut(env, key, JSON.stringify(rec));
     return json({ ok: true, id, places: places.length });
   }
 
@@ -534,7 +546,7 @@ async function inaNear(env, lat, lon) {
           lon: s.geom && s.geom.coordinates ? s.geom.coordinates[0] : null,
           al: s.nivel_alerta, ev: s.nivel_evacuacion
         })).filter(s => s.lat != null && s.lon != null);
-        await env.SUBS.put('ina:stations:v2', JSON.stringify(list), { expirationTtl: 86400 });
+        await kvPut(env, 'ina:stations:v2', JSON.stringify(list), { expirationTtl: 86400 });
       }
     } catch (e) { }
   }
@@ -601,7 +613,7 @@ async function riversNear(env, lat, lon) {
   }
 
   const list = [...seen.values()].sort((a, b) => a.d - b.d).slice(0, 6);
-  if (list.length) await env.SUBS.put(key, JSON.stringify(list), { expirationTtl: 604800 });
+  if (list.length) await kvPut(env, key, JSON.stringify(list), { expirationTtl: 604800 });
   return list;
 }
 
@@ -662,7 +674,7 @@ async function inaSeries(env, st) {
     }
   } catch (e) { }
 
-  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
+  await kvPut(env, key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
   return out;
 }
 
@@ -719,7 +731,7 @@ async function inaNow(env, seriesId) {
     hist: win.map(r => [String(r.d).slice(5, 10), rd(r.v)]),
     n: rows.length
   };
-  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 3600 });
+  await kvPut(env, key, JSON.stringify(out), { expirationTtl: 3600 });
   return out;
 }
 
@@ -962,7 +974,7 @@ async function hydroFor(env, lat, lon) {
 
   out.msg = out.plain;
 
-  await env.SUBS.put(key, JSON.stringify(out), { expirationTtl: 1800 });
+  await kvPut(env, key, JSON.stringify(out), { expirationTtl: 1800 });
   return out;
 }
 
@@ -1157,7 +1169,7 @@ async function runAlerts(env) {
     }
 
     if (gone) await env.SUBS.delete(k.name);
-    else await env.SUBS.put(k.name, JSON.stringify(rec));
+    else await kvPut(env, k.name, JSON.stringify(rec));
   }
 }
 
