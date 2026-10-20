@@ -233,3 +233,32 @@ test('con el río en alerta el clima tranquilo se aclara, no se esconde', async 
   await expect(card).toContainText('El clima, por ahora, tranquilo');
 });
 
+
+test('la invitación a apoyar aparece sola, pero nunca sobre una alerta', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  // aparece cuando no hay nada urgente
+  await page.evaluate(() => {
+    localStorage.removeItem('asn.support');
+    document.querySelectorAll('.sheet-wrap').forEach(w => { w.hidden = true; });
+    supportPopup();
+  });
+  const sheet = page.locator('#supportSheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText('Esto se sostiene entre todos');
+
+  // se cierra y no vuelve por dos semanas
+  await sheet.getByText('Ahora no').click();
+  await expect(sheet).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('asn.support'))).toBeTruthy();
+
+  // con una alerta activa no se muestra
+  await page.evaluate(() => {
+    localStorage.removeItem('asn.support');
+    S.data.t1.level = 4;
+    paint();
+    supportPopup();
+  });
+  await expect(sheet).toBeHidden();
+});

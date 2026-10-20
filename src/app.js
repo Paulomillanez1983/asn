@@ -1934,11 +1934,51 @@ function recordFeedback(p, a) {
   save();
 }
 
+/* ===================== Invitación a apoyar ===================== */
+const SUPPORT_KEY = 'asn.support';
+const SUPPORT_DAYS = 14;
+
+function supportSeen() {
+  try {
+    const last = Number(localStorage.getItem(SUPPORT_KEY) || 0);
+    return Date.now() - last < SUPPORT_DAYS * 86400000;
+  } catch (e) { return false; }
+}
+
+function supportClose() {
+  const w = document.getElementById('supportSheet');
+  if (w) w.hidden = true;
+  try { localStorage.setItem(SUPPORT_KEY, String(Date.now())); } catch (e) { }
+}
+
+function supportPopup() {
+  const w = document.getElementById('supportSheet');
+  if (!w || !w.hidden || supportSeen()) return;
+
+  /* sin lugares todavía: primero que aprenda a usar la app */
+  if (!S.places.length) return;
+
+  /* nunca encima de una alerta, ni tapando otra hoja abierta */
+  const alerting = S.places.some(p => {
+    const d = S.data[p.id];
+    if (!d) return false;
+    return (d.level || 0) >= 2 || (d.hydro && d.hydro.level >= 1);
+  });
+  if (alerting) return;
+  if (document.querySelector('.sheet-wrap:not([hidden])')) return;
+
+  w.hidden = false;
+  const go = document.getElementById('supportGo');
+  if (go) go.focus();
+}
+
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-open],#menu,#geoBtn,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
+  if (t.hasAttribute('data-closesupport')) { supportClose(); return; }
+  if (t.id === 'supportGo') { supportClose(); return; }
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
   if (t.hasAttribute('data-askans')) {
     const a = t.getAttribute('data-askans');
@@ -2050,7 +2090,7 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-open')) {
     const k = t.getAttribute('data-open');
     closeMenu();
-    if (k === 'support') { location.href = '/apoyar.html'; return; }
+    if (k === 'support') { location.href = '/apoyar.html#donar'; return; }
     if (k === 'tutorial') { openSheet(); return; }
     if (k === 'settings') { S.view = 'settings'; paint(); return; }
     return;
@@ -2158,6 +2198,9 @@ function init() {
     if (!document.hidden && Date.now() - S.updated > 5 * 60000 && S.places.length) refresh();
   });
   setInterval(() => { if (!document.hidden && S.places.length) refresh(); }, 5 * 60000);
+
+  /* a los 10 s, invitación a apoyar (nunca si hay alerta) */
+  setTimeout(supportPopup, 10000);
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => { });
     navigator.serviceWorker.addEventListener('message', e => {
@@ -2202,6 +2245,12 @@ function init() {
 
   window.__asnBooted = true;
 }
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const w = document.getElementById('supportSheet');
+  if (w && !w.hidden) supportClose();
+});
 
 document.addEventListener('DOMContentLoaded', init);
 

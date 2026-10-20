@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Compila los fuentes de src/ a public/ listos para publicar.
  *
  * No es ofuscación fuerte: es minificado con nombres internos acortados.
@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 
 const RESERVED = [
   'S', 'paint', 'refresh', 'save', 'load', 'toast',
-  'openMenu', 'enablePush', 'learnAdd'
+  'openMenu', 'enablePush', 'learnAdd', 'supportPopup', 'supportClose'
 ];
 
 const FILES = [
