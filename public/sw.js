@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v59';
+﻿const CACHE = 'asn-v60';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4', 'logo-mark.svg?v=5'];
 
 self.addEventListener('install', e => {
@@ -18,7 +18,8 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   const sameOrigin = url.origin === location.origin;
-  const isApi = url.hostname.endsWith('open-meteo.com') || url.hostname === 'ntfy.sh';
+  const isApi = url.pathname.startsWith('/api/') ||
+    url.hostname.endsWith('open-meteo.com') || url.hostname === 'ntfy.sh';
 
   if (isApi) return; // datos siempre frescos
 

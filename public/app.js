@@ -469,7 +469,7 @@ function nextEvent(d) {
 }
 
 function eventText(d) {
-  if (d.partial) return { txt: 'Datos de respaldo: MET Norway', big: false };
+  if (d.partial) return { txt: 'Datos de respaldo de una segunda fuente', big: false };
   const ev = nextEvent(d);
   if (!ev) return { txt: 'Sin lluvia ni ráfagas de más de 30 km/h en las próximas 12 horas', big: false };
   const mins = Math.round((new Date(ev.iso).getTime() - Date.now()) / 60000);
@@ -494,18 +494,7 @@ function maxGust(d, hours) {
 
 /* ===================== Red: clima ===================== */
 async function fetchPlace(p) {
-  const u = new URL('https://api.open-meteo.com/v1/forecast');
-  u.searchParams.set('latitude', p.lat);
-  u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth,cloud_cover');
-  u.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
-  u.searchParams.set('daily', 'sunrise,sunset');
-  u.searchParams.set('forecast_days', '2');
-  u.searchParams.set('models', MODELS.join(','));
-  u.searchParams.set('forecast_hours', '13');
-  u.searchParams.set('timezone', 'auto');
-  u.searchParams.set('wind_speed_unit', 'kmh');
-  const r = await fetch(u.toString(), { cache: 'no-store' });
+  const r = await fetch('/api/wx?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j.hourly || !j.hourly.time) throw new Error('sin datos');
@@ -532,13 +521,7 @@ async function fetchHydro(p) {
 
 /* Amanecer y atardecer (pedido aparte, sin modelos) */
 async function fetchSun(p) {
-  const u = new URL('https://api.open-meteo.com/v1/forecast');
-  u.searchParams.set('latitude', p.lat);
-  u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('daily', 'sunrise,sunset');
-  u.searchParams.set('forecast_days', '2');
-  u.searchParams.set('timezone', 'auto');
-  const r = await fetch(u.toString(), { cache: 'no-store' });
+  const r = await fetch('/api/sun?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
   if (!r.ok) throw new Error('sun HTTP ' + r.status);
   const j = await r.json();
   return j.daily || null;
@@ -546,9 +529,7 @@ async function fetchSun(p) {
 
 /* Segunda fuente independiente: MET Norway (sin clave, CORS abierto) */
 async function fetchMetno(p) {
-  const u = 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=' +
-    encodeURIComponent(p.lat) + '&lon=' + encodeURIComponent(p.lon);
-  const r = await fetch(u, { cache: 'no-store' });
+  const r = await fetch('/api/met?lat=' + encodeURIComponent(p.lat) + '&lon=' + encodeURIComponent(p.lon), { cache: 'no-store' });
   if (!r.ok) throw new Error('metno HTTP ' + r.status);
   const j = await r.json();
   const series = (j.properties && j.properties.timeseries) || [];
@@ -578,15 +559,7 @@ async function fetchMetno(p) {
 }
 
 async function fetchEnsemble(p) {
-  const u = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
-  u.searchParams.set('latitude', p.lat);
-  u.searchParams.set('longitude', p.lon);
-  u.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
-  u.searchParams.set('models', 'ecmwf_ifs025');
-  u.searchParams.set('forecast_hours', '4');
-  u.searchParams.set('timezone', 'auto');
-  u.searchParams.set('wind_speed_unit', 'kmh');
-  const r = await fetch(u.toString(), { cache: 'no-store' });
+  const r = await fetch('/api/ens?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j.hourly) throw new Error('sin ensemble');
@@ -600,10 +573,7 @@ let nominatimLast = 0;
 
 async function geoPhoton(term, sig) {
   const q = /c[oó]rdoba/i.test(term) ? term : term + ', Córdoba, Argentina';
-  const u = new URL('https://photon.komoot.io/api/');
-  u.searchParams.set('q', q);
-  u.searchParams.set('limit', '8');
-  const r = await fetch(u.toString(), { signal: sig });
+  const r = await fetch('/api/geo?kind=photon&q=' + encodeURIComponent(q), { signal: sig });
   if (!r.ok) return [];
   const j = await r.json();
   return (j.features || [])
@@ -625,15 +595,7 @@ async function geoNominatim(term, sig) {
   const wait = 1100 - (Date.now() - nominatimLast);
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   nominatimLast = Date.now();
-  const m = term.match(/^(.*?)\s+(\d{1,5})$/);
-  const u = new URL('https://nominatim.openstreetmap.org/search');
-  u.searchParams.set('format', 'jsonv2');
-  u.searchParams.set('addressdetails', '1');
-  u.searchParams.set('limit', '6');
-  u.searchParams.set('countrycodes', 'ar');
-  if (m) { u.searchParams.set('street', m[1] + ' ' + m[2]); u.searchParams.set('city', 'Córdoba'); }
-  else u.searchParams.set('q', term);
-  const r = await fetch(u.toString(), { signal: sig, headers: { Accept: 'application/json' } });
+  const r = await fetch('/api/geo?kind=nominatim&q=' + encodeURIComponent(term), { signal: sig });
   if (!r.ok) return [];
   const j = await r.json();
   return (Array.isArray(j) ? j : []).map(o => {
@@ -646,12 +608,7 @@ async function geoNominatim(term, sig) {
 }
 
 async function geoOpenMeteo(term, sig) {
-  const u = new URL('https://geocoding-api.open-meteo.com/v1/search');
-  u.searchParams.set('name', term);
-  u.searchParams.set('count', '6');
-  u.searchParams.set('language', 'es');
-  u.searchParams.set('countryCode', 'AR');
-  const r = await fetch(u.toString(), { signal: sig });
+  const r = await fetch('/api/geo?kind=om&q=' + encodeURIComponent(term), { signal: sig });
   if (!r.ok) return [];
   const j = await r.json();
   return (j.results || []).map(x => ({
@@ -1060,8 +1017,6 @@ function heroHtml(p) {
       ${probHtml(d)}
       ${barsHtml(d)}
       <div class="links">
-        <a href="https://www.rainviewer.com/map.html?loc=${p.lat},${p.lon},9" target="_blank" rel="noopener">🛰️ Radar</a>
-        <a href="https://map.blitzortung.org/#9/${p.lat}/${p.lon}" target="_blank" rel="noopener">⚡ Rayos</a>
         ${askBtn}
       </div>
     </details>
@@ -1277,8 +1232,7 @@ function getPosition() {
 
 async function reverseName(lat, lon) {
   try {
-    const u = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=es&lat=' + lat + '&lon=' + lon;
-    const r = await fetch(u, { cache: 'no-store' });
+    const r = await fetch('/api/rev?lat=' + lat + '&lon=' + lon, { cache: 'no-store' });
     if (!r.ok) return '';
     const j = await r.json();
     const a = j.address || {};
@@ -1440,7 +1394,7 @@ function probHtml(d) {
 
   if (d.met) {
     const gap = Math.abs(d.met.level - d.level);
-    out.push(`<div class="prob">Control externo <b>MET Norway</b>: nivel ${d.met.level} · lluvia ${d.met.rain3} mm · ráfagas ${d.met.gustKmh} km/h${gap >= 2 ? ' · <b>discrepa con Open-Meteo</b>' : ''}</div>`);
+    out.push(`<div class="prob">Control externo: nivel ${d.met.level} · lluvia ${d.met.rain3} mm · ráfagas ${d.met.gustKmh} km/h${gap >= 2 ? ' · <b>discrepa con Open-Meteo</b>' : ''}</div>`);
   }
 
   return out.join('');
@@ -1872,7 +1826,7 @@ function maybeOpenAsk() {
 /* Cruza el reporte del usuario con el radar de RainViewer (tiles con CORS) */
 async function radarCheck(p) {
   try {
-    const meta = await fetch('https://api.rainviewer.com/public/weather-maps.json', { cache: 'no-store' }).then(r => r.json());
+    const meta = await fetch('/api/radar', { cache: 'no-store' }).then(r => r.json());
     const past = meta && meta.radar && meta.radar.past;
     if (!past || !past.length) return 'unknown';
     const frame = past[past.length - 1];

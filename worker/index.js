@@ -57,7 +57,7 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://tilecache.rainviewer.com https://gibs.earthdata.nasa.gov",
-  "connect-src 'self' https://api.open-meteo.com https://ensemble-api.open-meteo.com https://flood-api.open-meteo.com https://api.met.no https://photon.komoot.io https://nominatim.openstreetmap.org https://api.rainviewer.com https://gibs.earthdata.nasa.gov",
+  "connect-src 'self'",
   "font-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -90,12 +90,155 @@ async function hash(str) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
 }
 
+/* ---------------- Puente de datos ----------------
+   El navegador solo habla con este dominio: así no queda a la vista de dónde
+   sale cada dato. También sirve para cachear en el borde y ahorrar llamadas. */
+const PROXY = new Set(['/api/wx', '/api/sun', '/api/ens', '/api/met', '/api/geo', '/api/rev', '/api/radar', '/api/wxmodel']);
+
+async function pipeJson(target, ttl = 300, extra = {}) {
+  const cache = caches.default;
+  const hit = await cache.match(target);
+  if (hit) return hit;
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 12000);
+  let r = null;
+  try {
+    r = await fetch(target, { signal: ctl.signal, headers: { accept: 'application/json', ...extra } });
+  } catch (e) {
+    clearTimeout(timer);
+    return json({ error: 'fuente no disponible' }, 502);
+  }
+  clearTimeout(timer);
+
+  const body = await r.text();
+  const res = new Response(body, {
+    status: r.ok ? 200 : r.status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=' + ttl
+    }
+  });
+  if (r.ok) await cache.put(target, res.clone());
+  return res;
+}
+
+async function proxy(url) {
+  const lat = Number(url.searchParams.get('lat'));
+  const lon = Number(url.searchParams.get('lon'));
+  const path = url.pathname;
+
+  /* direcciones */
+  if (path === '/api/geo') {
+    const q = (url.searchParams.get('q') || '').slice(0, 120);
+    const kind = url.searchParams.get('kind');
+    if (!q) return json({ error: 'falta q' }, 400);
+
+    if (kind === 'photon') {
+      return pipeJson('https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=8', 600);
+    }
+    if (kind === 'nominatim') {
+      const m = q.match(/^(.*?)\s+(\d{1,5})$/);
+      const t = new URL('https://nominatim.openstreetmap.org/search');
+      t.searchParams.set('format', 'jsonv2');
+      t.searchParams.set('addressdetails', '1');
+      t.searchParams.set('limit', '6');
+      t.searchParams.set('countrycodes', 'ar');
+      if (m) { t.searchParams.set('street', m[1] + ' ' + m[2]); t.searchParams.set('city', 'Córdoba'); }
+      else t.searchParams.set('q', q);
+      return pipeJson(t.toString(), 600, { 'User-Agent': 'ASN4/1.0 (contacto: paulomillanez@gmail.com)' });
+    }
+    const t = new URL('https://geocoding-api.open-meteo.com/v1/search');
+    t.searchParams.set('name', q);
+    t.searchParams.set('count', '6');
+    t.searchParams.set('language', 'es');
+    t.searchParams.set('countryCode', 'AR');
+    return pipeJson(t.toString(), 600);
+  }
+
+  if (path === '/api/rev') {
+    if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+    return pipeJson('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=es&lat=' +
+      lat + '&lon=' + lon, 86400, { 'User-Agent': 'ASN4/1.0 (contacto: paulomillanez@gmail.com)' });
+  }
+
+  /* radar: fotogramas disponibles */
+  if (path === '/api/radar') {
+    return pipeJson('https://api.rainviewer.com/public/weather-maps.json', 120);
+  }
+
+  if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+  const la = String(lat), lo = String(lon);
+
+  if (path === '/api/wx') {
+    const t = new URL('https://api.open-meteo.com/v1/forecast');
+    t.searchParams.set('latitude', la);
+    t.searchParams.set('longitude', lo);
+    t.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth,cloud_cover');
+    t.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
+    t.searchParams.set('daily', 'sunrise,sunset');
+    t.searchParams.set('forecast_days', '2');
+    t.searchParams.set('models', 'ecmwf_ifs025,gfs_seamless,icon_seamless,gem_seamless');
+    t.searchParams.set('forecast_hours', '13');
+    t.searchParams.set('timezone', 'auto');
+    t.searchParams.set('wind_speed_unit', 'kmh');
+    return pipeJson(t.toString(), 240);
+  }
+
+  if (path === '/api/sun') {
+    const t = new URL('https://api.open-meteo.com/v1/forecast');
+    t.searchParams.set('latitude', la);
+    t.searchParams.set('longitude', lo);
+    t.searchParams.set('daily', 'sunrise,sunset');
+    t.searchParams.set('forecast_days', '2');
+    t.searchParams.set('timezone', 'auto');
+    return pipeJson(t.toString(), 1800);
+  }
+
+  if (path === '/api/ens') {
+    const t = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
+    t.searchParams.set('latitude', la);
+    t.searchParams.set('longitude', lo);
+    t.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
+    t.searchParams.set('models', 'ecmwf_ifs025');
+    t.searchParams.set('forecast_hours', '4');
+    t.searchParams.set('timezone', 'auto');
+    t.searchParams.set('wind_speed_unit', 'kmh');
+    return pipeJson(t.toString(), 240);
+  }
+
+  if (path === '/api/met') {
+    return pipeJson('https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=' +
+      encodeURIComponent(la) + '&lon=' + encodeURIComponent(lo), 240,
+      { 'User-Agent': 'ASN4/1.0 (contacto: paulomillanez@gmail.com)' });
+  }
+
+  /* modelo para el GIF: varias coordenadas a la vez */
+  if (path === '/api/wxmodel') {
+    const lats = (url.searchParams.get('lats') || '').slice(0, 200);
+    const lons = (url.searchParams.get('lons') || '').slice(0, 200);
+    if (!lats || !lons) return json({ error: 'faltan coordenadas' }, 400);
+    const t = new URL('https://api.open-meteo.com/v1/forecast');
+    t.searchParams.set('latitude', lats);
+    t.searchParams.set('longitude', lons);
+    t.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
+    t.searchParams.set('models', 'ecmwf_ifs025');
+    t.searchParams.set('forecast_hours', '8');
+    t.searchParams.set('timezone', 'auto');
+    t.searchParams.set('wind_speed_unit', 'kmh');
+    return pipeJson(t.toString(), 240);
+  }
+
+  return json({ error: 'ruta desconocida' }, 404);
+}
+
 async function api(req, env, url) {
   const rules = {
     '/api/hydro': [60, 'hydro'],
     '/api/rivers': [30, 'rivers'],
     '/api/subscribe': [20, 'sub'],
-    '/api/test': [10, 'test']
+    '/api/test': [10, 'test'],
+    '/api/geo': [1200, 'geo']
   };
   const rule = rules[url.pathname];
   if (rule) {
@@ -103,6 +246,10 @@ async function api(req, env, url) {
     if (await limited(env, ip, rule[1], rule[0], 600)) {
       return json({ error: 'demasiadas solicitudes, probá en unos minutos' }, 429);
     }
+  }
+
+  if (PROXY.has(url.pathname) && req.method === 'GET') {
+    return await proxy(url);
   }
 
   if (url.pathname === '/api/vapid' && req.method === 'GET') {
@@ -305,7 +452,7 @@ async function sharePage(url, ctx) {
   <div class="place">${esc(name)}${place.a ? ' · ' + esc(place.a) : ''}</div>
   <div class="pct">${fast ? 'Estado al momento de compartir' : 'Próximas 3 horas · ' + pct + '% de ' + n + ' escenarios'}</div>
   <span class="cta">Abrir ASN 4.0</span>
-  <div class="foot">Pronóstico por conjuntos del IFS · Open-Meteo</div>
+  <div class="foot">ASN 4.0 · datos abiertos</div>
   <div class="auto">Abriendo ASN 4.0…</div>
 </a>
 <script>setTimeout(function(){location.replace('/')},3000)</script>

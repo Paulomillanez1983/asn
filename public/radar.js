@@ -1,4 +1,4 @@
-/* ASN 4.0 — GIF animado: radar si hay eco, pronóstico del modelo si no */
+﻿/* ASN 4.0 — GIF animado: radar si hay eco, pronóstico del modelo si no */
 (function () {
   const W = 560, H = 560, Z = 7, TILE = 256, FRAMES = 6, DELAY = 550;
   const COLORS = ['#34d399', '#fbbf24', '#fb923c', '#f87171', '#c084fc'];
@@ -96,7 +96,7 @@
   async function build(place, level, phen) {
     if (typeof window.GIFEncoder !== 'function') throw new Error('codificador no disponible');
 
-    const meta = await fetch('https://api.rainviewer.com/public/weather-maps.json', { cache: 'no-store' })
+    const meta = await fetch('/api/radar', { cache: 'no-store' })
       .then(r => r.json());
     const frames = ((meta.radar && meta.radar.past) || []).slice(-FRAMES);
     if (!frames.length) return buildModel(place, level, phen);
@@ -148,7 +148,7 @@
         level, place,
         sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
         stamp: 'ASN 4.0 · radar ' + hhmm(f.time),
-        foot: 'RainViewer · Open-Meteo'
+        foot: 'ASN 4.0 · radar'
       });
       encode(gif, ctx);
     }
@@ -233,7 +233,7 @@
         level, place,
         sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
         stamp: 'ASN 4.0 · satélite ' + stampTime.slice(11, 16) + ' UTC',
-        foot: 'GOES-East · NASA GIBS'
+        foot: 'ASN 4.0 · satélite'
       });
       encode(gif, ctx);
     }
@@ -252,8 +252,8 @@
       }
     }
 
-    const u = 'https://api.open-meteo.com/v1/forecast?latitude=' + lats.join(',') +
-      '&longitude=' + lons.join(',') + '&hourly=precipitation&forecast_hours=6&timezone=auto';
+    const u = '/api/wxmodel?lats=' + encodeURIComponent(lats.join(',')) +
+      '&lons=' + encodeURIComponent(lons.join(','));
     const raw = await fetch(u, { cache: 'no-store' }).then(r => r.json());
     const pts = Array.isArray(raw) ? raw : [raw];
     if (!pts.length || !pts[0].hourly) throw new Error('sin grilla del modelo');
@@ -297,7 +297,7 @@
         level, place,
         sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
         stamp: 'ASN 4.0 · pronóstico ' + String(times[h] || '').slice(11, 16),
-        foot: 'Modelo IFS · Open-Meteo'
+        foot: 'ASN 4.0 · modelo'
       });
 
       ctx.fillStyle = 'rgba(7,13,24,.6)';
