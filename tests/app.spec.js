@@ -285,3 +285,20 @@ test('con alerta la invitación pasa a barra chica, y en nivel 4 no aparece', as
   });
   await expect(page.locator('#supportBar')).toBeHidden();
 });
+
+test('la tarjeta para compartir usa el menú del teléfono', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__shared = null;
+    try { navigator.share = async (d) => { window.__shared = d; }; } catch (e) {}
+  });
+  await page.goto('/');
+  await seed(page, 0);
+
+  await expect(page.locator('.share')).toContainText('La seguridad la hacemos entre todos');
+  await page.locator('#shareApp').click();
+
+  const shared = await page.evaluate(() => window.__shared);
+  expect(shared).not.toBeNull();
+  expect(shared.url).toContain('asn.asn-clima.workers.dev');
+  expect(shared.text).toContain('ASN 4.0');
+});

@@ -892,8 +892,8 @@ function viewHome() {
   /* si hay alerta, la tarjeta va primero: lo demás puede esperar */
   const alerting = ordered.some(p => rank(p) >= 2);
   return alerting
-    ? top + body + promo + add + foot
-    : top + promo + body + add + foot;
+    ? top + body + promo + add + shareCard() + foot
+    : top + promo + body + add + shareCard() + foot;
 }
 
 function bindRail() {
@@ -1934,6 +1934,38 @@ function recordFeedback(p, a) {
   save();
 }
 
+/* ===================== Compartir la app ===================== */
+async function shareApp() {
+  const url = location.origin + '/';
+  const text = 'ASN 4.0 — el clima y el río de tu zona, gratis. Sin publicidad y sin instalar nada raro.';
+
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'ASN 4.0', text: text, url: url });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text + ' ' + url);
+    toast('Enlace copiado. Pegalo donde quieras.');
+  } catch (e) {
+    toast('Compartí este enlace: ' + url);
+  }
+}
+
+function shareCard() {
+  return `<div class="share">
+    <div class="sh-tx">
+      <b>La seguridad la hacemos entre todos</b>
+      <span>Pasale ASN 4.0 a tu familia. Cuanta más gente lo usa y reporta lo que ve, mejor responde en tu zona.</span>
+    </div>
+    <button class="sh-go" id="shareApp">Compartir</button>
+  </div>`;
+}
+
 /* ===================== Invitación a apoyar ===================== */
 const SUPPORT_KEY = 'asn.support';
 const SUPPORT_DAYS = 14;
@@ -2009,9 +2041,10 @@ function supportInvite() {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
+  if (t.id === 'shareApp') { shareApp(); return; }
   if (t.hasAttribute('data-closesupport')) { supportClose(); return; }
   if (t.id === 'supportGo') { supportClose(); return; }
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -2125,6 +2158,7 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-open')) {
     const k = t.getAttribute('data-open');
     closeMenu();
+    if (k === 'share') { shareApp(); return; }
     if (k === 'support') { location.href = '/apoyar.html#donar'; return; }
     if (k === 'tutorial') { openSheet(); return; }
     if (k === 'settings') { S.view = 'settings'; paint(); return; }

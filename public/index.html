@@ -382,6 +382,15 @@ label{display:block;font-size:12.5px;color:var(--dim);margin:14px 0 6px}
 .sb-x{flex:none;background:transparent;color:#7d90b3;font-size:13px;font-weight:500;
   padding:4px 2px;line-height:1}
 body.has-bar{padding-bottom:calc(86px + var(--sab))}
+
+/* invitación a compartir */
+.share{display:flex;gap:12px;align-items:center;margin-top:14px;padding:14px;border-radius:18px;
+  background:linear-gradient(150deg,#12294a,#0e1b30);border:1px solid rgba(96,165,250,.22)}
+.sh-tx{flex:1;min-width:0}
+.sh-tx b{display:block;font-size:14px;line-height:1.3}
+.sh-tx span{display:block;font-size:12.5px;color:#a9bcd8;line-height:1.45;margin-top:3px}
+.sh-go{flex:none;padding:10px 14px;font-size:13.5px;
+  background:linear-gradient(180deg,#3b82f6,#2563eb);box-shadow:0 8px 20px rgba(37,99,235,.32)}
 .srow{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)}
 .srow:last-child{border-bottom:0}
 .srow b{font-size:13.5px;display:block}
@@ -539,6 +548,12 @@ body.has-bar{padding-bottom:calc(86px + var(--sab))}
       <div class="mt"><b>Ubicación</b><span id="geoState">Permitir la ubicación hace que ASN detecte si estás en otra ciudad o cerca de otro río, y te avise de lluvias, ráfagas y crecidas <b>de ese lugar</b>. No guardamos un historial: solo comparamos tu posición con tus lugares al abrir la app.</span></div>
     </div>
     <button class="go" id="geoBtn" style="margin-top:8px">Activar ubicación</button>
+
+    <div class="mrow" data-open="share" role="button" tabindex="0">
+      <div class="mi">📣</div>
+      <div class="mt"><b>Compartir la app</b><span>La seguridad la hacemos entre todos.</span></div>
+      <div class="mi2">›</div>
+    </div>
 
     <div class="mrow" data-open="support" role="button" tabindex="0">
       <div class="mi">💚</div>
