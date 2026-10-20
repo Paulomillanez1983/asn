@@ -32,7 +32,7 @@ const S = {
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
   askPlace: null, radarResult: null, learn: {}, pushActive: false,
-  voice: true, addKind: 'casa', editId: null, editKind: 'casa', rivers: {},
+  voice: true, sound: true, addKind: 'casa', editId: null, editKind: 'casa', rivers: {},
   geoAsked: false, travel: null, travelSkip: {}
 };
 
@@ -64,13 +64,14 @@ function load() {
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
   S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
   if (raw.voice === false) S.voice = false;
+  if (raw.sound === false) S.sound = false;
   S.geoAsked = raw.geoAsked === true;
   S.travelSkip = (raw.travelSkip && typeof raw.travelSkip === 'object') ? raw.travelSkip : {};
 }
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice,
+      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice, sound: S.sound,
       geoAsked: S.geoAsked, travelSkip: S.travelSkip
     }));
   } catch (e) { }
@@ -86,6 +87,107 @@ function pickVoice() {
     const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
     return vs.find(v => /es[-_]AR/i.test(v.lang)) || vs.find(v => /^es/i.test(v.lang)) || null;
   } catch (e) { return null; }
+}
+
+/* ===================== Sonido de alerta ===================== */
+let actx = null;
+let soundUntil = 0;
+
+function ac() {
+  if (actx) return actx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  try { actx = new AC(); } catch (e) { return null; }
+  return actx;
+}
+
+/* Ningún navegador deja sonar audio hasta que la persona toca la pantalla. */
+function unlockAudio() {
+  const c = ac();
+  if (c && c.state === 'suspended') c.resume().catch(() => { });
+}
+
+function whoop(c, out, at, len) {
+  const o = c.createOscillator();
+  const g = c.createGain();
+  const lp = c.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 3400;
+  lp.Q.value = 6;
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(420, at);
+  o.frequency.exponentialRampToValueAtTime(920, at + len * 0.45);
+  o.frequency.exponentialRampToValueAtTime(470, at + len);
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(0.5, at + 0.035);
+  g.gain.setValueAtTime(0.5, at + len * 0.72);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+  o.connect(lp); lp.connect(g); g.connect(out);
+  o.start(at); o.stop(at + len + 0.03);
+}
+
+function tick(c, out, at) {
+  const o = c.createOscillator();
+  const g = c.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(1560, at);
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(0.3, at + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.075);
+  o.connect(g); g.connect(out);
+  o.start(at); o.stop(at + 0.09);
+}
+
+function thump(c, out, at) {
+  const o = c.createOscillator();
+  const g = c.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(80, at);
+  o.frequency.exponentialRampToValueAtTime(42, at + 0.28);
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(0.55, at + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.3);
+  o.connect(g); g.connect(out);
+  o.start(at); o.stop(at + 0.32);
+}
+
+/* Tono propio de ASN: sirena de dos barridos, golpe grave y tres tics.
+   No es una melodía: es una alarma, para que se reconozca sin mirar. */
+function playAlertSound(level, force) {
+  if (!force && !S.sound) return false;
+  const c = ac();
+  if (!c) return false;
+  const now = Date.now();
+  if (!force && now < soundUntil) return false;
+  if (c.state === 'suspended') c.resume().catch(() => { });
+
+  const urgent = (level || 0) >= 3;
+  const t = c.currentTime + 0.03;
+  const total = (urgent ? 2.75 : 2.05);
+
+  const master = c.createGain();
+  master.gain.value = 0.0001;
+  try {
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -20;
+    comp.knee.value = 12;
+    comp.ratio.value = 8;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+    master.connect(comp);
+    comp.connect(c.destination);
+  } catch (e) {
+    master.connect(c.destination);
+  }
+  master.gain.exponentialRampToValueAtTime(0.9, t + 0.05);
+
+  const n = urgent ? 3 : 2;
+  for (let i = 0; i < n; i++) whoop(c, master, t + i * 0.6, 0.5);
+  for (let i = 0; i < 3; i++) tick(c, master, t + (urgent ? 1.95 : 1.32) + i * 0.115);
+  thump(c, master, t);
+
+  soundUntil = now + total * 1000 + 500;
+  return true;
 }
 
 function speak(text) {
@@ -183,7 +285,7 @@ async function currentPush() {
 
 async function postSubscription(sub) {
   try {
-    await fetch('/api/subscribe', {
+    const r = await fetch('/api/subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -191,11 +293,22 @@ async function postSubscription(sub) {
         places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon, hydro: !!p.hydro }))
       })
     });
-  } catch (e) { }
+    return !!r.ok;
+  } catch (e) {
+    return false;
+  }
 }
 
+/* Cada guardado cuesta una escritura en el servidor y ese cupo es diario:
+   solo se manda si los lugares cambiaron de verdad. */
+let pushSig = '';
 async function syncPush() {
-  if (pushSub) await postSubscription(pushSub);
+  if (!pushSub) return false;
+  const sig = JSON.stringify(S.places.map(p => [p.id, p.label, p.lat, p.lon]));
+  if (sig === pushSig) return true;
+  const ok = await postSubscription(pushSub);
+  if (ok) pushSig = sig;
+  return ok;
 }
 
 async function enablePush() {
@@ -219,7 +332,13 @@ async function enablePush() {
       sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
     }
     pushSub = sub;
-    await postSubscription(sub);
+    const okSync = await postSubscription(sub);
+    if (!okSync) {
+      toast('El servidor no aceptó los avisos. Probá de nuevo en un rato.');
+      paint();
+      return;
+    }
+    pushSig = JSON.stringify(S.places.map(p => [p.id, p.label, p.lat, p.lon]));
     S.pushActive = true;
     S.hideNotify = true;
     toast('Avisos en tiempo real activados');
@@ -749,7 +868,11 @@ function checkAlert(p, agg) {
       `${L.emoji} ${L.name} · ${ph.emoji} ${ph.word} en ${p.label}`,
       info.action
     );
-    speak(`${L.name}. ${ph.word} en ${p.label}. ${info.action}`);
+    const msg = `${L.name}. ${ph.word} en ${p.label}. ${info.action}`;
+    /* suena solo cuando la alerta cambió, no al abrir la app ni en el recordatorio de los 30 min */
+    const chime = prev !== undefined && changed ? playAlertSound(agg.level) : false;
+    if (chime) setTimeout(() => speak(msg), 1250); /* primero la alarma, después la explicación */
+    else speak(msg);
     S.last[p.id] = { level: agg.level, at: now, ph: ph.word };
   } else {
     S.last[p.id] = {
@@ -1499,6 +1622,11 @@ function viewSettings() {
       ${isStandalone() ? '<span style="color:#34d399;font-size:13px">✓</span>' : '<button class="ghost" id="installBtn" style="padding:8px 12px;font-size:13px">Instalar</button>'}</div>
     <div class="row"><div class="grow"><b>Voz</b><small>Lee las alertas en voz alta</small></div>
       <button class="ghost" id="toggleVoice" style="padding:8px 12px;font-size:13px">${S.voice ? 'Desactivar' : 'Activar'}</button></div>
+    <div class="row"><div class="grow"><b>Sonido de alerta</b><small>${S.sound ? 'Tono propio cuando cambia una alerta' : 'Apagado'}</small></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="ghost" id="testSound" style="padding:8px 12px;font-size:13px">Probar</button>
+        <button class="ghost" id="toggleSound" style="padding:8px 12px;font-size:13px">${S.sound ? 'Desactivar' : 'Activar'}</button>
+      </div></div>
     <div class="row"><div class="grow"><b>Avisos en tiempo real</b><small>${S.pushActive ? 'Activados en este dispositivo' : perm === 'denied' ? 'Bloqueados por el navegador' : 'Sin activar'}</small></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
         ${S.pushActive
@@ -1646,27 +1774,19 @@ async function onSearchInput(v) {
   }, 420);
 }
 
-function b64url(obj) {
-  const s = JSON.stringify(obj);
-  const b = btoa(unescape(encodeURIComponent(s)));
-  return b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/* Enlace que se lee solo: /alerta/4/crecida-grave/-27.27/-58.24/casa
+   Sin guardar nada: no gasta escrituras y se puede tipear a mano. */
+function slug(s, max) {
+  const t = String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return t.slice(0, max || 18) || 'lugar';
 }
 
-/* Enlace corto: los datos quedan guardados del lado del servidor.
-   Una URL de 280 caracteres no se puede tocar en Facebook ni en WhatsApp. */
-async function shareLink(o) {
-  try {
-    const r = await fetch('/api/share', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(o)
-    });
-    if (r.ok) {
-      const j = await r.json();
-      if (j && j.id) return location.origin + '/alerta/' + j.id;
-    }
-  } catch (e) { }
-  return location.origin + '/alerta/' + b64url(o); /* respaldo sin red */
+function shareUrl(o) {
+  const lat = Number(o.lat).toFixed(2);
+  const lon = Number(o.lon).toFixed(2);
+  return location.origin + '/alerta/' + o.l + '/' + slug(o.p) + '/' + lat + '/' + lon + '/' + slug(o.n, 20);
 }
 
 async function sharePlace(id) {
@@ -1685,7 +1805,7 @@ async function sharePlace(id) {
     ? { word: d0.hydro.headline || 'crecida', emoji: '🌊' }
     : phenomenon(d0);
 
-  const url = await shareLink({
+  const url = shareUrl({
     n: p.label, a: p.addr, lat: p.lat, lon: p.lon,
     l: lvl, p: ph.word, e: ph.emoji
   });
@@ -2099,7 +2219,7 @@ function supportInvite() {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-edit],[data-ekind],[data-closeedit],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#editSave,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-edit],[data-ekind],[data-closeedit],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#editSave,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice,#toggleSound,#testSound');
   if (!t) return;
 
   if (t.id === 'shareApp') { shareApp(); return; }
@@ -2199,6 +2319,19 @@ document.addEventListener('click', ev => {
     if (!S.voice && 'speechSynthesis' in window) speechSynthesis.cancel();
     save(); paint();
     toast(S.voice ? 'Voz activada' : 'Voz desactivada');
+    return;
+  }
+  if (t.id === 'toggleSound') {
+    S.sound = !S.sound;
+    save(); paint();
+    if (S.sound) playAlertSound(3, true);
+    toast(S.sound ? 'Sonido activado' : 'Sonido desactivado');
+    return;
+  }
+  if (t.id === 'testSound') {
+    unlockAudio();
+    const ok = playAlertSound(3, true);
+    toast(ok ? 'Así suena la alarma' : 'Este navegador no puede reproducir sonido');
     return;
   }
   if (t.hasAttribute('data-close')) { closeSheet(); return; }
@@ -2336,6 +2469,7 @@ function init() {
     navigator.serviceWorker.register('sw.js').catch(() => { });
     navigator.serviceWorker.addEventListener('message', e => {
       if (e.data && e.data.type === 'speak' && e.data.text) speak(e.data.text);
+      if (e.data && e.data.type === 'alert-sound') playAlertSound(e.data.level || 3);
     });
   }
 
@@ -2384,6 +2518,10 @@ document.addEventListener('keydown', e => {
   const w = document.getElementById('supportSheet');
   if (w && !w.hidden) supportClose();
 });
+
+/* el audio se habilita con el primer toque: es la regla de todos los navegadores */
+['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+  document.addEventListener(ev, unlockAudio, { once: true, passive: true }));
 
 document.addEventListener('DOMContentLoaded', init);
 

@@ -290,27 +290,6 @@ async function api(req, env, url) {
     return json(await riversNear(env, lat, lon));
   }
 
-  /* enlace corto para compartir (sin coordenadas visibles) */
-  if (url.pathname === '/api/share' && req.method === 'POST') {
-    let b = null;
-    try { b = await req.json(); } catch (e) { }
-    if (!b || !isFinite(Number(b.lat)) || !isFinite(Number(b.lon))) {
-      return json({ error: 'datos inválidos' }, 400);
-    }
-    const rec = {
-      n: String(b.n || 'Mi lugar').slice(0, 26),
-      a: String(b.a || '').slice(0, 54),
-      lat: Number(Number(b.lat).toFixed(3)),
-      lon: Number(Number(b.lon).toFixed(3)),
-      l: Math.max(0, Math.min(4, Number(b.l) || 0)),
-      p: String(b.p || '').slice(0, 22),
-      e: String(b.e || '').slice(0, 4)
-    };
-    const id = shortId();
-    await env.SUBS.put('sh:' + id, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 120 });
-    return json({ id: id });
-  }
-
   if (url.pathname === '/api/hydro' && req.method === 'GET') {
     const lat = Number(url.searchParams.get('lat'));
     const lon = Number(url.searchParams.get('lon'));
@@ -368,13 +347,15 @@ function esc(s) {
   }[c]));
 }
 
-/* id corto, sin caracteres que se confundan al leerlo en voz alta */
-function shortId() {
-  const abc = '23456789abcdefghjkmnpqrstuvwxyz';
-  const b = crypto.getRandomValues(new Uint8Array(7));
-  let s = '';
-  for (let i = 0; i < b.length; i++) s += abc[b[i] % abc.length];
-  return s;
+function phenEmoji(s) {
+  const t = String(s || '');
+  if (/crecid|inund|agua|rio/.test(t)) return '🌊';
+  if (/lluv|llovizn/.test(t)) return '🌧️';
+  if (/vient|rafag/.test(t)) return '💨';
+  if (/graniz/.test(t)) return '🧊';
+  if (/niev/.test(t)) return '❄️';
+  if (/torment|electr|ray/.test(t)) return '⛈️';
+  return '⚠️';
 }
 
 function decodeToken(t) {
@@ -396,9 +377,30 @@ async function sharePage(url, env, ctx) {
   if (cached) return cached;
 
   const token = url.pathname.slice('/alerta/'.length);
+  const parts = token.split('/').filter(Boolean);
   let place = null;
-  if (/^[a-z0-9]{6,10}$/i.test(token)) {
-    try { place = await env.SUBS.get('sh:' + token, 'json'); } catch (e) { }
+
+  /* enlace legible: /alerta/4/crecida-grave/-27.27/-58.24/casa */
+  if (parts.length >= 4 && /^[0-4]$/.test(parts[0])) {
+    const lat = Number(parts[2]);
+    const lon = Number(parts[3]);
+    if (isFinite(lat) && isFinite(lon)) {
+      const phSlug = parts[1] || '';
+      let nm = 'Mi lugar';
+      try { nm = decodeURIComponent(parts[4] || '').replace(/-/g, ' ').trim() || 'Mi lugar'; } catch (e) { }
+      nm = nm.charAt(0).toUpperCase() + nm.slice(1);
+      place = {
+        l: Number(parts[0]),
+        p: phSlug.replace(/-/g, ' '),
+        e: phenEmoji(phSlug),
+        n: nm,
+        a: '',
+        lat: lat,
+        lon: lon
+      };
+    }
+  } else if (/^[a-z0-9]{6,10}$/i.test(token)) {
+    try { place = await env.SUBS.get('sh:' + token, 'json'); } catch (e) { } /* enlaces ya compartidos */
   } else {
     place = decodeToken(token); /* enlaces viejos con datos adentro */
   }

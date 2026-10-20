@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v70';
+﻿const CACHE = 'asn-v75';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4', 'logo-mark.svg?v=5'];
 
 self.addEventListener('install', e => {
@@ -61,20 +61,29 @@ self.addEventListener('push', e => {
   const kind = MAP[d.kind] || 'alert';
   const level = Number(d.level || 0);
 
-  const vib = kind === 'flood' ? [420, 140, 420, 140, 420]
-    : kind === 'storm' ? [220, 90, 220, 90, 380]
-      : [300, 100, 300];
+  /* la vibración es lo único que el sistema deja elegir en una notificación:
+     un patrón largo y repetido para que se distinga del resto de las apps */
+  const vib = level >= 4 ? [700, 180, 700, 180, 700, 180, 1100]
+    : level >= 3 ? [600, 150, 600, 150, 900]
+      : kind === 'flood' ? [420, 140, 420, 140, 420]
+        : kind === 'storm' ? [220, 90, 220, 90, 380]
+          : [300, 100, 300];
 
-  e.waitUntil(self.registration.showNotification(title, {
-    body,
-    icon: 'icon-192.png',
-    badge: 'badge-' + kind + '.png',
-    vibrate: vib,
-    requireInteraction: level >= 2,
-    renotify: true,
-    tag: d.tag || ('asn-' + kind),
-    data: { url: d.url || './', speech: d.speech || d.title || '', kind }
-  }));
+  e.waitUntil(Promise.all([
+    self.registration.showNotification(title, {
+      body,
+      icon: 'icon-192.png',
+      badge: 'badge-' + kind + '.png',
+      vibrate: vib,
+      requireInteraction: level >= 2,
+      renotify: true,
+      tag: d.tag || ('asn-' + kind),
+      data: { url: d.url || './', speech: d.speech || d.title || '', kind }
+    }),
+    /* si la app está abierta, el tono propio lo pone la página */
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(list => list.forEach(c => c.postMessage({ type: 'alert-sound', level, kind })))
+  ]));
 });
 
 self.addEventListener('notificationclick', e => {

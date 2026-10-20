@@ -305,24 +305,17 @@ test('la tarjeta para compartir usa el menú del teléfono', async ({ page }) =>
   expect(shared.text).toContain('ASN 4.0');
 });
 
-test('el enlace para compartir queda corto y resuelve el lugar', async ({ request }) => {
-  const r = await request.post('/api/share', {
-    data: { n: 'Casa', a: 'Itatí, Corrientes', lat: -27.2731, lon: -58.2438, l: 4, p: 'crecida grave', e: '🌊' },
-    headers: { origin: 'https://asn.asn-clima.workers.dev' }
-  });
-  expect(r.ok()).toBeTruthy();
-  const { id } = await r.json();
-  expect(id).toMatch(/^[a-z0-9]{7}$/);
-
-  const page = await request.get('/alerta/' + id);
-  expect(page.ok()).toBeTruthy();
-  const html = await page.text();
+test('el enlace para compartir se lee solo y resuelve el lugar', async ({ request }) => {
+  const res = await request.get('/alerta/4/crecida-grave/-27.27/-58.24/casa?t=' + Date.now()); // evita la vista previa cacheada
+  expect(res.ok()).toBeTruthy();
+  const html = await res.text();
   expect(html).toContain('Casa');
+  expect(html).toContain('crecida grave');
   expect(html).toContain('/og/morada.png');
   expect(html.length).toBeGreaterThan(500);
 });
 
-test('el botón de compartir de una tarjeta arma un enlace corto', async ({ page }) => {
+test('el botón de compartir de una tarjeta arma un enlace legible', async ({ page }) => {
   await page.addInitScript(() => {
     window.__shared = null;
     try { navigator.share = async d => { window.__shared = d; }; } catch (e) {}
@@ -334,8 +327,8 @@ test('el botón de compartir de una tarjeta arma un enlace corto', async ({ page
   await page.waitForTimeout(1500); // la CSP no permite usar waitForFunction
 
   const s = await page.evaluate(() => window.__shared);
-  expect(s.url).toMatch(/^https:\/\/[^/]+\/alerta\/[a-z0-9]{7}$/);
-  expect(s.url.length).toBeLessThan(70);
+  expect(s.url).toMatch(/^https:\/\/[^/]+\/alerta\/2\/[a-z-]+\/-31\.29\/-64\.30\/casa$/);
+  expect(s.url.length).toBeLessThan(90);
 
   const r = await page.request.get(s.url);
   expect(r.ok()).toBeTruthy();
@@ -390,4 +383,44 @@ test('ajustes ofrece editar el lugar', async ({ page }) => {
 
   await page.locator('[data-edit]').first().click();
   await expect(page.locator('#editSheet')).toBeVisible();
+});
+
+test('el sonido de alerta suena al probarlo y se recuerda si está apagado', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__beeps = 0;
+    const noop = () => { };
+    window.AudioContext = function () {
+      return {
+        currentTime: 0, state: 'running', destination: {},
+        resume: () => Promise.resolve(),
+        createGain: () => ({ gain: { value: 0, setValueAtTime: noop, exponentialRampToValueAtTime: noop }, connect: noop }),
+        createOscillator: () => ({
+          type: '', frequency: { setValueAtTime: noop, exponentialRampToValueAtTime: noop },
+          connect: noop, start: () => { window.__beeps++; }, stop: noop
+        }),
+        createBiquadFilter: () => ({ type: '', frequency: { value: 0 }, Q: { value: 0 }, connect: noop }),
+        createDynamicsCompressor: () => ({
+          threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 },
+          attack: { value: 0 }, release: { value: 0 }, connect: noop
+        })
+      };
+    };
+  });
+
+  await page.goto('/');
+  await seed(page, 0);
+  await page.evaluate(() => { S.view = 'settings'; paint(); });
+
+  await expect(page.locator('.row', { hasText: 'Sonido de alerta' })).toContainText('Tono propio');
+
+  await page.locator('#testSound').click();
+  await expect.poll(() => page.evaluate(() => window.__beeps)).toBeGreaterThan(4);
+
+  await page.locator('#toggleSound').click();
+  await expect(page.locator('#toggleSound')).toHaveText('Activar');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('asn.v1')).sound)).toBe(false);
+
+  await page.locator('#toggleSound').click();
+  await expect(page.locator('#toggleSound')).toHaveText('Desactivar');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('asn.v1')).sound)).toBe(true);
 });
