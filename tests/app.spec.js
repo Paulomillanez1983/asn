@@ -8,10 +8,12 @@ test.beforeEach(async ({ page }) => {
   // sin red externa: los tests controlan los datos con seed()
   await page.route('**/*', route => {
     const u = route.request().url();
+    const path = new URL(u).pathname;
+    if (path === '/api/share') return route.continue(); // sí queremos probar el enlace corto
     if (
       u.includes('open-meteo.com') || u.includes('api.met.no') ||
       u.includes('nominatim.openstreetmap.org') || u.includes('photon.komoot.io') ||
-      /\/api\//.test(new URL(u).pathname)
+      /\/api\//.test(path)
     ) return route.abort();
     return route.continue();
   });
@@ -301,4 +303,40 @@ test('la tarjeta para compartir usa el menú del teléfono', async ({ page }) =>
   expect(shared).not.toBeNull();
   expect(shared.url).toContain('asn.asn-clima.workers.dev');
   expect(shared.text).toContain('ASN 4.0');
+});
+
+test('el enlace para compartir queda corto y resuelve el lugar', async ({ request }) => {
+  const r = await request.post('/api/share', {
+    data: { n: 'Casa', a: 'Itatí, Corrientes', lat: -27.2731, lon: -58.2438, l: 4, p: 'crecida grave', e: '🌊' },
+    headers: { origin: 'https://asn.asn-clima.workers.dev' }
+  });
+  expect(r.ok()).toBeTruthy();
+  const { id } = await r.json();
+  expect(id).toMatch(/^[a-z0-9]{7}$/);
+
+  const page = await request.get('/alerta/' + id);
+  expect(page.ok()).toBeTruthy();
+  const html = await page.text();
+  expect(html).toContain('Casa');
+  expect(html).toContain('/og/morada.png');
+  expect(html.length).toBeGreaterThan(500);
+});
+
+test('el botón de compartir de una tarjeta arma un enlace corto', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__shared = null;
+    try { navigator.share = async d => { window.__shared = d; }; } catch (e) {}
+  });
+  await page.goto('/');
+  await seed(page, 2);
+
+  await page.locator('[data-share="t1"]').click();
+  await page.waitForTimeout(1500); // la CSP no permite usar waitForFunction
+
+  const s = await page.evaluate(() => window.__shared);
+  expect(s.url).toMatch(/^https:\/\/[^/]+\/alerta\/[a-z0-9]{7}$/);
+  expect(s.url.length).toBeLessThan(70);
+
+  const r = await page.request.get(s.url);
+  expect(r.ok()).toBeTruthy();
 });

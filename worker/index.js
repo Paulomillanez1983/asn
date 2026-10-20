@@ -21,7 +21,7 @@ async function route(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/alerta/')) {
       try {
-        return await sharePage(url, ctx);
+        return await sharePage(url, env, ctx);
       } catch (e) {
         return new Response('No pudimos generar la vista previa.', { status: 500 });
       }
@@ -290,6 +290,27 @@ async function api(req, env, url) {
     return json(await riversNear(env, lat, lon));
   }
 
+  /* enlace corto para compartir (sin coordenadas visibles) */
+  if (url.pathname === '/api/share' && req.method === 'POST') {
+    let b = null;
+    try { b = await req.json(); } catch (e) { }
+    if (!b || !isFinite(Number(b.lat)) || !isFinite(Number(b.lon))) {
+      return json({ error: 'datos inválidos' }, 400);
+    }
+    const rec = {
+      n: String(b.n || 'Mi lugar').slice(0, 26),
+      a: String(b.a || '').slice(0, 54),
+      lat: Number(Number(b.lat).toFixed(3)),
+      lon: Number(Number(b.lon).toFixed(3)),
+      l: Math.max(0, Math.min(4, Number(b.l) || 0)),
+      p: String(b.p || '').slice(0, 22),
+      e: String(b.e || '').slice(0, 4)
+    };
+    const id = shortId();
+    await env.SUBS.put('sh:' + id, JSON.stringify(rec), { expirationTtl: 60 * 60 * 24 * 120 });
+    return json({ id: id });
+  }
+
   if (url.pathname === '/api/hydro' && req.method === 'GET') {
     const lat = Number(url.searchParams.get('lat'));
     const lon = Number(url.searchParams.get('lon'));
@@ -347,6 +368,15 @@ function esc(s) {
   }[c]));
 }
 
+/* id corto, sin caracteres que se confundan al leerlo en voz alta */
+function shortId() {
+  const abc = '23456789abcdefghjkmnpqrstuvwxyz';
+  const b = crypto.getRandomValues(new Uint8Array(7));
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += abc[b[i] % abc.length];
+  return s;
+}
+
 function decodeToken(t) {
   try {
     const pad = '='.repeat((4 - (t.length % 4)) % 4);
@@ -360,13 +390,18 @@ function decodeToken(t) {
   }
 }
 
-async function sharePage(url, ctx) {
+async function sharePage(url, env, ctx) {
   const cache = caches.default;
   const cached = await cache.match(url.href);
   if (cached) return cached;
 
   const token = url.pathname.slice('/alerta/'.length);
-  const place = decodeToken(token);
+  let place = null;
+  if (/^[a-z0-9]{6,10}$/i.test(token)) {
+    try { place = await env.SUBS.get('sh:' + token, 'json'); } catch (e) { }
+  } else {
+    place = decodeToken(token); /* enlaces viejos con datos adentro */
+  }
   if (!place) return new Response('Enlace inválido', { status: 404 });
 
   /* si el token trae el estado (links nuevos) responde al instante, sin API */

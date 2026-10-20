@@ -1648,6 +1648,23 @@ function b64url(obj) {
   return b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/* Enlace corto: los datos quedan guardados del lado del servidor.
+   Una URL de 280 caracteres no se puede tocar en Facebook ni en WhatsApp. */
+async function shareLink(o) {
+  try {
+    const r = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(o)
+    });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.id) return location.origin + '/alerta/' + j.id;
+    }
+  } catch (e) { }
+  return location.origin + '/alerta/' + b64url(o); /* respaldo sin red */
+}
+
 async function sharePlace(id) {
   const p = S.places.find(x => x.id === id);
   if (!p) return;
@@ -1664,12 +1681,10 @@ async function sharePlace(id) {
     ? { word: d0.hydro.headline || 'crecida', emoji: '🌊' }
     : phenomenon(d0);
 
-  const token = b64url({
+  const url = await shareLink({
     n: p.label, a: p.addr, lat: p.lat, lon: p.lon,
     l: lvl, p: ph.word, e: ph.emoji
   });
-  const stamp = lvl + 'h' + Math.floor(Date.now() / 3600000);
-  const url = location.origin + '/alerta/' + token + '?s=' + stamp;
   const text = `${LEVELS[lvl].name} · ${ph.word} en ${p.label}`;
   try {
     if (navigator.share) {
