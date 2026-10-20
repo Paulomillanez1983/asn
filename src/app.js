@@ -89,6 +89,43 @@ function pickVoice() {
   } catch (e) { return null; }
 }
 
+/* ===================== Tormenta en formación ===================== */
+function kmBetween(a, b, c, d) {
+  const R = 6371, p = Math.PI / 180;
+  const dl = (c - a) * p, dn = (d - b) * p;
+  const h = Math.sin(dl / 2) ** 2 + Math.cos(a * p) * Math.cos(c * p) * Math.sin(dn / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function loadNowcast() {
+  try {
+    const r = await fetch('/api/nowcast', { cache: 'no-store' });
+    if (!r.ok) return;
+    S.nc = await r.json();
+    paintNowcast();
+  } catch (e) { }
+}
+
+function paintNowcast() {
+  const bar = document.getElementById('ncBar');
+  if (!bar) return;
+  const list = (S.nc && S.nc.tormentas) || [];
+  const edad = S.nc && S.nc.generado ? Date.now() - new Date(S.nc.generado).getTime() : 1e12;
+  if (!list.length || edad > 45 * 60 * 1000 || !S.places.length) { bar.hidden = true; return; }
+  let best = null;
+  for (const p of S.places) {
+    for (const s of list) {
+      const d = kmBetween(p.lat, p.lon, s.lat, s.lon);
+      if (d <= 90 && (!best || d < best.d)) best = { d: Math.round(d), p, s };
+    }
+  }
+  if (!best) { bar.hidden = true; return; }
+  const m = best.s.movimiento;
+  const llega = m && Array.isArray(m.llega) ? m.llega[0] : null;
+  bar.innerHTML = '⛈ <span>Tormenta a <b>' + best.d + ' km</b> de ' + esc(best.p.label) +
+    (llega ? ' · llega en ~' + llega.min + ' min' : '') + '</span>';
+  bar.hidden = false;
+}
 /* ===================== Sonido de alerta ===================== */
 let actx = null;
 let soundUntil = 0;
@@ -785,6 +822,7 @@ async function refresh() {
   if (S.busy) return;
   S.busy = true;
   paint();
+  loadNowcast();
   const results = await Promise.allSettled(S.places.map(async p => {
     const [det, ens, met, sun, hyd] = await Promise.allSettled([
       fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p), fetchHydro(p)

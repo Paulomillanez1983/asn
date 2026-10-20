@@ -1,4 +1,4 @@
-﻿const CACHE = 'asn-v76';
+﻿const CACHE = 'asn-v77';
 const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4', 'logo-mark.svg?v=5'];
 
 self.addEventListener('install', e => {

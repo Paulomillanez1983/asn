@@ -328,6 +328,34 @@ async function api(req, env, url) {
     return json({ ok: true });
   }
 
+  /* Nowcast: la ingesta publica cada 10 minutos; la app solo lee. */
+  if (url.pathname === '/api/nowcast') {
+    if (req.method === 'GET') {
+      try {
+        const obj = await env.NOWCAST.get('nowcast.json');
+        if (!obj) return json({ disponible: false });
+        return new Response(await obj.text(), {
+          headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }
+        });
+      } catch (e) {
+        return json({ disponible: false });
+      }
+    }
+    if (req.method === 'POST') {
+      if (req.headers.get('x-asn-key') !== env.NOWCAST_KEY) {
+        return json({ error: 'no autorizado' }, 401);
+      }
+      const body = await req.text();
+      if (body.length > 250000) return json({ error: 'muy grande' }, 413);
+      try { JSON.parse(body); } catch (e) { return json({ error: 'json inválido' }, 400); }
+      await env.NOWCAST.put('nowcast.json', body, {
+        httpMetadata: { contentType: 'application/json' }
+      });
+      const prueba = await env.NOWCAST.get('nowcast.json');
+      return json({ ok: !!prueba, bytes: body.length });
+    }
+  }
+
   if (url.pathname === '/api/rivers' && req.method === 'GET') {
     const lat = Number(url.searchParams.get('lat'));
     const lon = Number(url.searchParams.get('lon'));
