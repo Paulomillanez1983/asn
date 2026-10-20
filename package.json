@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "asn-4",
   "version": "1.0.0",
   "description": "Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica en tus lugares.",
@@ -7,7 +7,8 @@
     "doc": "docs"
   },
   "scripts": {
-    "deploy": "wrangler deploy",
+    "build": "node scripts/build.mjs",
+    "deploy": "npm run build && wrangler deploy",
     "dev": "wrangler dev",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
@@ -29,6 +30,7 @@
   },
   "type": "module",
   "devDependencies": {
-    "@playwright/test": "^1.49.1"
+    "@playwright/test": "^1.49.1",
+    "terser": "^5.51.2"
   }
 }
