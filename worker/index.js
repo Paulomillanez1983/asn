@@ -1109,7 +1109,9 @@ async function sendPush(env, sub, title, body, tag, kind = 'alert', level = 0) {
 async function runAlerts(env) {
   const list = await env.SUBS.list({ prefix: 'sub:' });
   for (const k of list.keys) {
-    const rec = await env.SUBS.get(k.name, 'json');
+    const raw = await env.SUBS.get(k.name);
+    let rec = null;
+    try { rec = raw ? JSON.parse(raw) : null; } catch (e) { rec = null; }
     if (!rec || !rec.sub || !Array.isArray(rec.places)) continue;
     let gone = false;
 
@@ -1207,8 +1209,12 @@ async function runAlerts(env) {
       }
     }
 
+    /* El cron corre cada 10 minutos: escribir el estado de cada suscriptor
+       en cada vuelta gastaba 144 escrituras por día por persona y agotaba
+       el cupo con siete usuarios. Ahora solo se escribe si algo cambió. */
+    const out = JSON.stringify(rec);
     if (gone) await env.SUBS.delete(k.name);
-    else await kvPut(env, k.name, JSON.stringify(rec));
+    else if (out !== raw) await kvPut(env, k.name, out);
   }
 }
 
