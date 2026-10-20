@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -122,16 +122,16 @@ a{color:#93c5fd;text-decoration:none}
   background:radial-gradient(circle,var(--glow,rgba(52,211,153,.5)) 0%,transparent 70%);
   opacity:.55;pointer-events:none;filter:blur(2px);
 }
-.hero.lv0{--glow:#34d399;background:linear-gradient(165deg,#0f2c24,#0b1727)}
-.hero.lv1{--glow:#fbbf24;background:linear-gradient(165deg,#2a2411,#101a2b)}
-.hero.lv2{--glow:#fb923c;background:linear-gradient(165deg,#301d0e,#121a2b);border-color:rgba(251,146,60,.28)}
-.hero.lv3{--glow:#f87171;background:linear-gradient(165deg,#33111a,#17101f);border-color:rgba(248,113,113,.38)}
-.hero.lv4{--glow:#c084fc;background:linear-gradient(165deg,#2a1238,#170f26);border-color:rgba(192,132,252,.42)}
+.hero.lv0{--glow:#34d399;--hero-bg:linear-gradient(165deg,#0f2c24,#0b1727);background:var(--hero-bg)}
+.hero.lv1{--glow:#fbbf24;--hero-bg:linear-gradient(165deg,#2a2411,#101a2b);background:var(--hero-bg)}
+.hero.lv2{--glow:#fb923c;--hero-bg:linear-gradient(165deg,#301d0e,#121a2b);background:var(--hero-bg);border-color:rgba(251,146,60,.28)}
+.hero.lv3{--glow:#f87171;--hero-bg:linear-gradient(165deg,#33111a,#17101f);background:var(--hero-bg);border-color:rgba(248,113,113,.38)}
+.hero.lv4{--glow:#c084fc;--hero-bg:linear-gradient(165deg,#2a1238,#170f26);background:var(--hero-bg);border-color:rgba(192,132,252,.42)}
 /* creciente: misma escala de cinco colores que el clima, con base de agua fría */
-.hero.flood1{--glow:#fbbf24;background:linear-gradient(165deg,#2a2411,#0e1c2a);border-color:rgba(251,191,36,.3)}
-.hero.flood2{--glow:#fb923c;background:linear-gradient(165deg,#301d0e,#101c2a);border-color:rgba(251,146,60,.34)}
-.hero.flood3{--glow:#f87171;background:linear-gradient(165deg,#33111a,#141a26);border-color:rgba(248,113,113,.42)}
-.hero.flood4{--glow:#c084fc;background:linear-gradient(165deg,#2a1238,#151624);border-color:rgba(192,132,252,.48)}
+.hero.flood1{--glow:#fbbf24;--hero-bg:linear-gradient(165deg,#2a2411,#0e1c2a);background:var(--hero-bg);border-color:rgba(251,191,36,.3)}
+.hero.flood2{--glow:#fb923c;--hero-bg:linear-gradient(165deg,#301d0e,#101c2a);background:var(--hero-bg);border-color:rgba(251,146,60,.34)}
+.hero.flood3{--glow:#f87171;--hero-bg:linear-gradient(165deg,#33111a,#141a26);background:var(--hero-bg);border-color:rgba(248,113,113,.42)}
+.hero.flood4{--glow:#c084fc;--hero-bg:linear-gradient(165deg,#2a1238,#151624);background:var(--hero-bg);border-color:rgba(192,132,252,.48)}
 .hero.flood1 .title{color:#fde68a}
 .hero.flood2 .title{color:#fdba74}
 .hero.flood3 .title{color:#fca5a5}
@@ -168,27 +168,30 @@ a{color:#93c5fd;text-decoration:none}
 .rfoot{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:10.5px;color:#6f83a6}
 .rproj{margin-top:9px;font-size:12.5px;color:#fde68a;line-height:1.45}
 .rpeak{margin-top:6px;font-size:12.5px;color:#a7f3d0;line-height:1.45}
-/* desde amarilla: borde de luz que recorre la tarjeta */
+/* desde amarilla: haz de luz que recorre el borde de la tarjeta */
 @property --ang{syntax:'<angle>';inherits:false;initial-value:0deg}
-.hero.alert::before{
-  content:"";position:absolute;inset:0;border-radius:inherit;padding:1.6px;
-  background:conic-gradient(from var(--ang),transparent 0 62%,var(--glow) 78%,#fff 84%,var(--glow) 90%,transparent 100%);
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;
-  animation:rot 4.6s linear infinite;pointer-events:none;opacity:.95;
+.hero.alert{
+  border-width:2px;border-color:transparent;
+  background:
+    var(--hero-bg) padding-box,
+    conic-gradient(from var(--ang),transparent 0 55%,var(--glow) 72%,#fff 82%,var(--glow) 90%,transparent 100%) border-box;
+  animation:rise .34s cubic-bezier(.2,.7,.3,1) both, rot 4.6s linear infinite;
 }
+.hero.alert::before{opacity:.2}
 @keyframes rot{to{--ang:360deg}}
-.hero.alert::after{
-  content:"";position:absolute;top:0;left:-40%;width:38%;height:100%;
-  background:linear-gradient(100deg,transparent,rgba(255,255,255,.10),transparent);
-  transform:skewX(-14deg);animation:sweep 5.2s ease-in-out infinite;pointer-events:none;
-}
-@keyframes sweep{0%{left:-45%}55%{left:120%}100%{left:120%}}
 .hero.alert .main{position:relative;z-index:1}
-.hero .where{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
+.hero .where{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:nowrap;font-size:12px;color:var(--dim)}
+.hero .where>span{flex:none}
+.chip3h{white-space:nowrap}
 .hero .where b{color:#e8f0ff;font-weight:650;letter-spacing:.1px}
 .hero .chip3h{background:rgba(255,255,255,.06);padding:3px 9px;border-radius:999px;font-size:11px}
 .chip3h.hydro{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);color:#fff;font-weight:700}
+/* nombre del lugar: se toca para renombrarlo o cambiarle el tipo */
+.plbl{display:inline-flex;align-items:center;gap:7px;background:transparent;border:0;padding:2px 0;
+  color:var(--dim);font:inherit;font-size:12px;line-height:1.2;min-height:30px;flex:1 1 auto;min-width:0;text-align:left}
+.plbl b{color:#e8f0ff;font-weight:650;letter-spacing:.1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plbl .pen{font-size:10px;opacity:.5;flex:none}
+.plbl:active .pen{opacity:1}
 .iconbtn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#dbe7ff;
   min-width:42px;min-height:38px;display:inline-grid;place-items:center;
   padding:8px 9px;border-radius:11px;font-size:15px;line-height:1;font-weight:500}
@@ -590,6 +593,25 @@ body.has-bar{padding-bottom:calc(86px + var(--sab))}
       <div class="mt"><b>Ajustes</b><span>Lugares, avisos, voz y privacidad.</span></div>
       <div class="mi2">›</div>
     </div>
+  </section>
+</div>
+
+<div class="sheet-wrap" id="editSheet" hidden>
+  <div class="sheet-backdrop" data-closeedit></div>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+    <button class="x" data-closeedit aria-label="Cerrar">✕</button>
+    <h2 id="editTitle">Editar lugar</h2>
+    <p class="lead" id="editAddr">—</p>
+
+    <div class="card">
+      <div class="lbl">Nombre</div>
+      <input id="editName" maxlength="22" autocomplete="off" autocapitalize="words" placeholder="Como le decís vos">
+      <div class="lbl" style="margin:16px 0 8px">¿Qué es este lugar?</div>
+      <div class="kinds" id="editKinds"></div>
+      <p style="font-size:12px;color:#7d90b3;margin-top:12px;line-height:1.45">El nombre y el tipo son solo para vos: sirven para reconocer el lugar de un vistazo.</p>
+    </div>
+
+    <button class="go" id="editSave">Guardar</button>
   </section>
 </div>
 

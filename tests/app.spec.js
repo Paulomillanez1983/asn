@@ -340,3 +340,54 @@ test('el botón de compartir de una tarjeta arma un enlace corto', async ({ page
   const r = await page.request.get(s.url);
   expect(r.ok()).toBeTruthy();
 });
+
+test('se puede renombrar un lugar y cambiarle el tipo', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  const name = page.locator('.plbl').first();
+  await expect(name).toContainText('Casa');
+  await name.click();
+
+  const sheet = page.locator('#editSheet');
+  await expect(sheet).toBeVisible();
+  await expect(page.locator('#editName')).toHaveValue('Casa');
+  await expect(page.locator('#editKinds button')).toHaveCount(6);
+  await expect(sheet).toContainText('Oficina');
+  await expect(sheet).toContainText('Colegio');
+
+  await page.locator('[data-ekind="escuela"]').click();
+  await page.locator('#editName').fill('Colegio de los chicos');
+  await page.locator('#editSave').click();
+
+  await expect(sheet).toBeHidden();
+  await expect(page.locator('.plbl').first()).toContainText('Colegio de los chicos');
+  await expect(page.locator('.plbl').first()).toContainText('🏫');
+
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('asn.v1')));
+  expect(saved.places[0].label).toBe('Colegio de los chicos');
+  expect(saved.places[0].kind).toBe('escuela');
+});
+
+test('sin nombre propio el lugar toma el nombre del tipo', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  await page.locator('.plbl').first().click();
+  await page.locator('#editName').fill('   ');
+  await page.locator('[data-ekind="trabajo"]').click();
+  await page.locator('#editSave').click();
+
+  await expect(page.locator('.plbl').first()).toContainText('Trabajo');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('asn.v1')));
+  expect(saved.places[0].label).toBe('Trabajo');
+});
+
+test('ajustes ofrece editar el lugar', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+  await page.evaluate(() => { S.view = 'settings'; paint(); });
+
+  await page.locator('[data-edit]').first().click();
+  await expect(page.locator('#editSheet')).toBeVisible();
+});

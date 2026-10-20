@@ -1,14 +1,15 @@
-'use strict';
+﻿'use strict';
 
 /* ===================== Configuración ===================== */
 const KINDS = [
   { id: 'casa', label: 'Casa', emoji: '🏠' },
-  { id: 'trabajo', label: 'Trabajo', emoji: '🏢' },
+  { id: 'trabajo', label: 'Trabajo', emoji: '💼' },
+  { id: 'oficina', label: 'Oficina', emoji: '🏢' },
+  { id: 'escuela', label: 'Colegio', emoji: '🏫' },
   { id: 'familia', label: 'Familia', emoji: '👨‍👩‍👧' },
-  { id: 'escuela', label: 'Escuela', emoji: '🏫' },
-  { id: 'importante', label: 'Lugar importante', emoji: '⭐' }
+  { id: 'importante', label: 'Importante', emoji: '⭐' }
 ];
-const kindOf = p => KINDS.find(k => k.id === (p && p.kind)) || KINDS[4];
+const kindOf = p => KINDS.find(k => k.id === (p && p.kind)) || KINDS[KINDS.length - 1];
 
 const MODELS = ['ecmwf_ifs025', 'gfs_seamless', 'icon_seamless', 'gem_seamless'];
 const MODEL_NAME = { ecmwf_ifs025: 'ECMWF', gfs_seamless: 'GFS', icon_seamless: 'ICON', gem_seamless: 'GEM' };
@@ -31,7 +32,7 @@ const S = {
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
   askPlace: null, radarResult: null, learn: {}, pushActive: false,
-  voice: true, addKind: 'casa', rivers: {},
+  voice: true, addKind: 'casa', editId: null, editKind: 'casa', rivers: {},
   geoAsked: false, travel: null, travelSkip: {}
 };
 
@@ -974,7 +975,9 @@ function heroHtml(p) {
 
   return `<section class="hero ${info.cls}${effLvl >= 1 ? ' alert' : ''}">
     <div class="where">
-      <span>${k.emoji} <b>${esc(p.label)}</b></span>
+      <button class="plbl" data-edit="${p.id}" aria-label="Editar ${esc(p.label)}">
+        <span>${k.emoji}</span><b>${esc(p.label)}</b><span class="pen">✏️</span>
+      </button>
       <span style="display:flex;align-items:center;gap:7px">
         <span class="chip3h${hyLvl >= 1 ? ' hydro' : ''}">${esc(pill)}</span>
         ${effLvl >= 2 && !hyLvl ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
@@ -1466,6 +1469,7 @@ function viewSettings() {
   const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
   const rows = S.places.map(p => `<div class="row">
       <div class="grow"><b>${kindOf(p).emoji} ${esc(p.label)}</b><small>${esc(p.addr || (p.lat.toFixed(3) + ', ' + p.lon.toFixed(3)))}</small></div>
+      <button class="ghost" data-edit="${p.id}" style="padding:8px 12px;font-size:13px">Editar</button>
       <button class="del" data-del="${p.id}">Quitar</button>
     </div>`).join('') || `<p class="hint">Todavía no agregaste lugares.</p>`;
 
@@ -1789,6 +1793,45 @@ function addPlace(r) {
   syncPush();
 }
 
+/* ===================== Editar un lugar ===================== */
+function openEdit(id) {
+  const p = S.places.find(x => x.id === id);
+  if (!p) return;
+  S.editId = p.id;
+  S.editKind = p.kind || 'casa';
+  document.getElementById('editAddr').textContent =
+    p.addr || (p.lat.toFixed(3) + ', ' + p.lon.toFixed(3));
+  document.getElementById('editName').value = p.label || '';
+  paintEditKinds();
+  document.getElementById('editSheet').hidden = false;
+}
+
+function paintEditKinds() {
+  const box = document.getElementById('editKinds');
+  if (!box) return;
+  box.innerHTML = KINDS.map(k =>
+    `<button data-ekind="${k.id}" class="${S.editKind === k.id ? 'on' : ''}">${k.emoji} ${k.label}</button>`
+  ).join('');
+}
+
+function closeEdit() {
+  const el = document.getElementById('editSheet');
+  if (el) el.hidden = true;
+}
+
+function saveEdit() {
+  const p = S.places.find(x => x.id === S.editId);
+  if (!p) { closeEdit(); return; }
+  const k = KINDS.find(x => x.id === S.editKind) || KINDS[0];
+  const nm = (document.getElementById('editName').value || '').trim().slice(0, 22);
+  p.kind = k.id;
+  p.label = nm || k.label;
+  save();
+  paint();
+  closeEdit();
+  toast('Lugar actualizado');
+}
+
 function useGPS() {
   if (!navigator.geolocation) { toast('Este navegador no da la ubicación'); return; }
   toast('Buscando tu ubicación…');
@@ -2056,10 +2099,14 @@ function supportInvite() {
 
 /* ===================== Eventos ===================== */
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
+  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-edit],[data-ekind],[data-closeedit],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#editSave,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice');
   if (!t) return;
 
   if (t.id === 'shareApp') { shareApp(); return; }
+  if (t.hasAttribute('data-edit')) { openEdit(t.getAttribute('data-edit')); return; }
+  if (t.hasAttribute('data-closeedit')) { closeEdit(); return; }
+  if (t.hasAttribute('data-ekind')) { S.editKind = t.getAttribute('data-ekind'); paintEditKinds(); return; }
+  if (t.id === 'editSave') { saveEdit(); return; }
   if (t.hasAttribute('data-closesupport')) { supportClose(); return; }
   if (t.id === 'supportGo') { supportClose(); return; }
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
@@ -2332,6 +2379,8 @@ function init() {
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  const ed = document.getElementById('editSheet');
+  if (ed && !ed.hidden) { closeEdit(); return; }
   const w = document.getElementById('supportSheet');
   if (w && !w.hidden) supportClose();
 });
