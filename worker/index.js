@@ -97,6 +97,39 @@ async function kvPut(env, key, val, opts) {
     else await env.SUBS.put(key, val);
   } catch (e) { }
 }
+/* ---------------- Caché HTTP ----------------
+   Las respuestas caras (río, estaciones, arroyos) se guardan en la caché
+   de Cloudflare y no en KV: KV tiene 1.000 escrituras por día en el plan
+   gratuito y se agota con pocos usuarios. La caché no consume ese cupo. */
+const CACHE_HOST = 'https://asn.cache/';
+
+async function cGet(key, maxAgeMs) {
+  try {
+    const res = await caches.default.match(new Request(CACHE_HOST + key));
+    if (!res) return null;
+    if (maxAgeMs) {
+      const at = Number(res.headers.get('x-at') || 0);
+      if (!at || Date.now() - at > maxAgeMs) return null;
+    }
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function cPut(key, obj, ttlSec) {
+  try {
+    const res = new Response(JSON.stringify(obj), {
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'max-age=' + (ttlSec || 600),
+        'x-at': String(Date.now())
+      }
+    });
+    await caches.default.put(new Request(CACHE_HOST + key), res);
+  } catch (e) { }
+}
+
 async function hash(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
@@ -580,7 +613,7 @@ async function overpassJson(q) {
 
 async function riversNear(env, lat, lon) {
   const key = `rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`;
-  const hit = await env.SUBS.get(key, 'json');
+  const hit = await cGet(key);
   if (hit) return hit;
 
   const dLat = 0.06, dLon = 0.07;
@@ -613,7 +646,7 @@ async function riversNear(env, lat, lon) {
   }
 
   const list = [...seen.values()].sort((a, b) => a.d - b.d).slice(0, 6);
-  if (list.length) await kvPut(env, key, JSON.stringify(list), { expirationTtl: 604800 });
+  if (list.length) await cPut(key, list, 604800);
   return list;
 }
 
@@ -624,7 +657,12 @@ const HIST_FROM = '1990-01-01';
 /* datos fijos de la estación: serie, umbrales y percentiles propios */
 async function inaSeries(env, st) {
   const key = `ina:ser:v3:${st.id}`;
-  const hit = await env.SUBS.get(key, 'json');
+  /* la serie histórica es cara (trae años de datos) y cambia poco:
+     se guarda en KV, que es global, para que ningún nodo la vuelva a pedir.
+     Una escritura por estación cada 7 días no mueve la aguja. */
+  let hit = null;
+  try { hit = await env.SUBS.get(key, 'json'); } catch (e) { }
+  if (!hit) hit = await cGet(key);
   if (hit) return hit;
 
   let out = null;
@@ -674,6 +712,7 @@ async function inaSeries(env, st) {
     }
   } catch (e) { }
 
+  await cPut(key, out, 7 * 86400);
   await kvPut(env, key, JSON.stringify(out), { expirationTtl: 7 * 86400 });
   return out;
 }
@@ -681,8 +720,8 @@ async function inaSeries(env, st) {
 /* nivel de hoy + tendencia de los últimos días */
 async function inaNow(env, seriesId) {
   const key = `ina:now:v3:${seriesId}`;
-  const hit = await env.SUBS.get(key, 'json');
-  if (hit && Date.now() - hit.at < 45 * 60 * 1000) return hit;
+  const hit = await cGet(key, 45 * 60 * 1000);
+  if (hit) return hit;
 
   const end = new Date();
   const start = new Date(end.getTime() - 40 * 86400000);
@@ -731,7 +770,7 @@ async function inaNow(env, seriesId) {
     hist: win.map(r => [String(r.d).slice(5, 10), rd(r.v)]),
     n: rows.length
   };
-  await kvPut(env, key, JSON.stringify(out), { expirationTtl: 3600 });
+  await cPut(key, out, 3600);
   return out;
 }
 
@@ -837,14 +876,14 @@ function hydroWords(level, o) {
 
 async function hydroFor(env, lat, lon) {
   const key = `hydro:v11:${lat.toFixed(3)},${lon.toFixed(3)}`;
-  const hit = await env.SUBS.get(key, 'json');
-  if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit;
+  const hit = await cGet(key, 30 * 60 * 1000);
+  if (hit) return hit;
 
   const out = { at: Date.now(), level: 0, q: null, p90: null, p95: null, rain48: 0, stations: [], river: null, msg: '' };
 
   let riverPoint = null;
   try {
-    const cachedRivers = await env.SUBS.get(`rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`, 'json');
+    const cachedRivers = await cGet(`rivers:v3:${lat.toFixed(2)},${lon.toFixed(2)}`);
     if (cachedRivers && cachedRivers.length) riverPoint = cachedRivers[0];
   } catch (e) { }
 
@@ -974,7 +1013,7 @@ async function hydroFor(env, lat, lon) {
 
   out.msg = out.plain;
 
-  await kvPut(env, key, JSON.stringify(out), { expirationTtl: 1800 });
+  await cPut(key, out, 1800);
   return out;
 }
 

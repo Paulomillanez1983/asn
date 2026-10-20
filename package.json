@@ -9,6 +9,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "deploy": "npm run build && wrangler deploy",
+    "smoke": "node scripts/smoke.mjs",
+    "ship": "node scripts/ship.mjs",
     "dev": "wrangler dev",
     "test": "playwright test",
     "test:ui": "playwright test --ui"
