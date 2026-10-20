@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 
 const RESERVED = [
   'S', 'paint', 'refresh', 'save', 'load', 'toast',
-  'openMenu', 'enablePush', 'learnAdd', 'supportPopup', 'supportClose'
+  'openMenu', 'enablePush', 'learnAdd', 'supportPopup', 'supportClose', 'supportInvite'
 ];
 
 const FILES = [

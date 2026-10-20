@@ -262,3 +262,26 @@ test('la invitación a apoyar aparece sola, pero nunca sobre una alerta', async 
   });
   await expect(sheet).toBeHidden();
 });
+
+test('con alerta la invitación pasa a barra chica, y en nivel 4 no aparece', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 2);
+
+  await page.evaluate(() => {
+    localStorage.removeItem('asn.support');
+    document.querySelectorAll('.sheet-wrap').forEach(w => { w.hidden = true; });
+    supportInvite();
+  });
+  await expect(page.locator('#supportBar')).toBeVisible();
+  await expect(page.locator('#supportSheet')).toBeHidden();
+
+  // en evacuación no se pide nada
+  await page.evaluate(() => {
+    localStorage.removeItem('asn.support');
+    const bar = document.getElementById('supportBar'); if (bar) bar.hidden = true;
+    S.data.t1.level = 4;
+    paint();
+    supportInvite();
+  });
+  await expect(page.locator('#supportBar')).toBeHidden();
+});

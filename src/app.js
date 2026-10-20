@@ -1948,7 +1948,21 @@ function supportSeen() {
 function supportClose() {
   const w = document.getElementById('supportSheet');
   if (w) w.hidden = true;
+  const bar = document.getElementById('supportBar');
+  if (bar) bar.hidden = true;
+  document.body.classList.remove('has-bar');
   try { localStorage.setItem(SUPPORT_KEY, String(Date.now())); } catch (e) { }
+}
+
+/* el peor nivel que hay en pantalla, sea de clima o de río */
+function worstLevel() {
+  let w = 0;
+  S.places.forEach(p => {
+    const d = S.data[p.id];
+    if (!d) return;
+    w = Math.max(w, d.level || 0, (d.hydro && d.hydro.level) || 0);
+  });
+  return w;
 }
 
 function supportPopup() {
@@ -1970,6 +1984,27 @@ function supportPopup() {
   w.hidden = false;
   const go = document.getElementById('supportGo');
   if (go) go.focus();
+}
+
+/* Decide cómo invitar según lo que esté pasando:
+   sin alerta → hoja completa. Con alerta → barra chica al pie.
+   En nivel 4 (evacuación) no se pide nada. */
+function supportInvite() {
+  if (supportSeen() || !S.places.length) return;
+  if (document.querySelector('.sheet-wrap:not([hidden])')) return;
+
+  const w = worstLevel();
+  if (w >= 4) return;
+
+  if (w >= 1) {
+    const bar = document.getElementById('supportBar');
+    if (!bar) return;
+    bar.hidden = false;
+    document.body.classList.add('has-bar');
+    return;
+  }
+
+  supportPopup();
 }
 
 /* ===================== Eventos ===================== */
@@ -2200,7 +2235,7 @@ function init() {
   setInterval(() => { if (!document.hidden && S.places.length) refresh(); }, 5 * 60000);
 
   /* a los 10 s, invitación a apoyar (nunca si hay alerta) */
-  setTimeout(supportPopup, 10000);
+  setTimeout(supportInvite, 10000);
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => { });
     navigator.serviceWorker.addEventListener('message', e => {
