@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 /* ===================== Configuración ===================== */
 const KINDS = [
@@ -1937,7 +1937,7 @@ function recordFeedback(p, a) {
 /* ===================== Compartir la app ===================== */
 async function shareApp() {
   const url = location.origin + '/';
-  const text = 'ASN 4.0 — el clima y el río de tu zona, gratis. Sin publicidad y sin instalar nada raro.';
+  const text = 'ASN 4.0 te avisa antes de salir: lluvia fuerte, ráfagas, granizo y crecida del río en tus lugares. Gratis, sin publicidad y sin instalar nada.';
 
   try {
     if (navigator.share) {

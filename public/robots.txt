@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /alerta/
+Disallow: /apoyar.html
+
+Sitemap: https://asn.asn-clima.workers.dev/sitemap.xml
