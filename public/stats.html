@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ASN 4.0 · tablero</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:#080e18;color:#e8f0ff;padding:20px 22px 40px}
+  header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:19px;margin:0}
+  .sub{color:#8298ba;font-size:12px;margin-top:3px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .panel{background:#0f1828;border:1px solid #1d2b44;border-radius:16px;padding:16px}
+  .panel h2{font-size:11.5px;letter-spacing:.7px;text-transform:uppercase;color:#8298ba;margin:0 0 14px;font-weight:600}
+  .kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .kpi{flex:1;min-width:130px;background:#0f1828;border:1px solid #1d2b44;border-radius:16px;padding:14px 16px}
+  .kpi b{display:block;font-size:30px;line-height:1.05;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:11px;color:#8298ba;letter-spacing:.4px;text-transform:uppercase}
+  .kpi em{font-style:normal;font-size:11.5px;color:#5eead4;margin-left:6px}
+  svg{display:block;width:100%;height:auto}
+  .bar{fill:#2563eb}.bar2{fill:#1e3a8a}
+  .axis{fill:#5b6f8f;font-size:9px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td{padding:7px 4px;border-bottom:1px solid #16233a}
+  td:last-child{text-align:right;color:#cfe0ff;font-variant-numeric:tabular-nums}
+  .mini{height:4px;background:#1b2942;border-radius:3px;margin-top:5px;overflow:hidden}
+  .mini i{display:block;height:100%;background:#3b82f6}
+  .msg{color:#8298ba;font-size:13px}
+  .legend{font-size:11px;color:#8298ba;margin-top:8px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 5px 0 12px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>ASN 4.0 · tablero de uso</h1>
+    <div class="sub" id="sub">cargando…</div>
+  </div>
+  <div class="sub">sin IP · sin nombre · sin coordenadas</div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><b id="total">—</b><span>sesiones hoy</span></div>
+  <div class="kpi"><b id="inst">—</b><span>instalada</span></div>
+  <div class="kpi"><b id="web">—</b><span>navegador</span></div>
+  <div class="kpi"><b id="dias">—</b><span>días con datos</span></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Sesiones por día</h2>
+    <svg id="chart" viewBox="0 0 520 200" preserveAspectRatio="none"></svg>
+    <div class="legend"><span class="dot" style="background:#2563eb"></span>instalada<span class="dot" style="background:#1e3a8a"></span>navegador</div>
+  </div>
+
+  <div class="panel">
+    <h2>Dónde se abre</h2>
+    <svg id="map" viewBox="0 0 330 520"></svg>
+    <div class="legend">El tamaño del círculo es la cantidad de sesiones.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Provincias</h2>
+    <table id="prov"><tbody></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Plataforma y versión</h2>
+    <table id="plat"><tbody></tbody></table>
+    <h2 style="margin-top:18px">Versión</h2>
+    <table id="ver"><tbody></tbody></table>
+  </div>
+</div>
+
+<script src="/stats.js"></script>
+</body>
+</html>

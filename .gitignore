@@ -28,3 +28,10 @@ h*.json
 wx.json
 hardware/
 
+
+# artefactos locales
+icon2.py
+preview_notif.png
+brand/stats.png
+device/
+
