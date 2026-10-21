@@ -1,0 +1,29 @@
+ASN 4.0 — Alerta Super Niño
+Copyright (C) 2026 Paulo Millanez
+
+Este programa es software libre: podés redistribuirlo y/o modificarlo bajo los
+términos de la GNU Affero General Public License tal como la publica la Free
+Software Foundation, en su versión 3 o cualquier versión posterior.
+
+Se distribuye con la esperanza de que sea útil, pero SIN NINGUNA GARANTÍA,
+ni siquiera la garantía implícita de COMERCIABILIDAD o IDONEIDAD PARA UN FIN
+PARTICULAR. Ver la GNU Affero General Public License para más detalles.
+
+Deberías haber recibido una copia de la GNU Affero General Public License
+junto con este programa. Si no, ver <https://www.gnu.org/licenses/>.
+
+---
+
+Datos de terceros (no cubiertos por esta licencia):
+
+- Open-Meteo — CC BY 4.0
+- MET Norway — NLOD / CC BY 4.0
+- OpenStreetMap — ODbL
+- NASA GIBS / GOES-19 — dominio público
+- INA — datos públicos
+
+Marca: "ASN 4.0", "Alerta Super Niño" y el logo no se licencian para uso
+comercial ni para sugerir respaldo oficial.
+
+ASN 4.0 no es un servicio oficial de emergencia. Las alertas son orientativas
+y no reemplazan las indicaciones de las autoridades.
