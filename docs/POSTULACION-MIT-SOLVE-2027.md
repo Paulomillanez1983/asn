@@ -8,7 +8,7 @@
 
 > Instrucciones: copiá cada respuesta en el formulario. Los textos entre `[CORCHETES]` son datos que tenés que completar vos; no los inventé. Las respuestas están en inglés y respetan los límites de palabras del formulario.
 
-> **Advertencia previa:** el repositorio `github.com/Paulomillanez1983/asn` devuelve 404 al 21/10/2026: está privado o todavía no existe con ese nombre. La respuesta de "What makes your solution innovative" afirma que el código es público. **No envíes la postulación sin publicar el repo**, o cambiá esa frase. Publicarlo también es requisito para Open Source Collective.
+> **Estado del repositorio:** `github.com/Paulomillanez1983/asn` es público desde el 21/10/2026 y GitHub lo detecta como AGPL-3.0. La respuesta de "What makes your solution innovative" ya es correcta.
 
 ---
 
@@ -254,7 +254,7 @@ The main financial risk is founder dependency. The first use of any grant would 
 
 ## Checklist antes de enviar
 
-- [ ] **Publicar el repositorio** en GitHub con LICENSE AGPL-3.0 y README actualizado. Hoy da 404: está privado.
+- [x] **Repositorio público** con LICENSE AGPL-3.0 y README actualizado (verificado el 21/10/2026).
 - [ ] URL de la app responde (probarla desde otro teléfono y en incógnito).
 - [ ] Link del video en YouTube/Vimeo, público, ≤2 minutos.
 - [ ] Reemplazar todos los `[CORCHETES]`: métricas, fecha de inicio, nombre, email, teléfono.
@@ -280,4 +280,5 @@ The main financial risk is founder dependency. The first use of any grant would 
 Solve dice explícitamente que no es un programa para "solo recaudar fondos". La respuesta de "Why are you applying" está escrita para eso: pone la validación y la sostenibilidad institucional antes que la plata. No la cambies por una lista de necesidades de financiamiento.
 
 Y una cosa que el formulario castiga: exagerar la etapa. Con 21 dispositivos, "Pilot" es correcto. "Growth" te dejaría fuera en la primera revisión.
+
 
