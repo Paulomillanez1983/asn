@@ -10,3 +10,21 @@ node_modules
 
 test-results
 playwright-report
+
+# configuracion local con claves
+wrangler.toml
+
+# scripts de trabajo y artefactos sueltos
+ap.js
+app-prod.js
+chk*.py
+fix*.py
+add_share.py
+restore_t.py
+rm_*.py
+split.cjs
+shot.mjs
+h*.json
+wx.json
+hardware/
+

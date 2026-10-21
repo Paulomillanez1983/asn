@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "asn-4",
   "version": "1.0.0",
   "description": "Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica en tus lugares.",
@@ -13,6 +13,7 @@
     "ship": "node scripts/ship.mjs",
     "dev": "wrangler dev",
     "test": "playwright test",
+    "test:unit": "node --test tests/storm-eta.unit.mjs",
     "test:ui": "playwright test --ui"
   },
   "repository": {
@@ -21,7 +22,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-or-later",
   "bugs": {
     "url": "https://github.com/Paulomillanez1983/asn/issues"
   },

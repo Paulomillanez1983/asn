@@ -3,6 +3,8 @@
 Monitor de inteligencia meteorológica para la familia. Te dice, de un vistazo, si viene lluvia fuerte, ráfagas, granizo o tormenta eléctrica en tus lugares.
 
 **App:** https://asn.asn-clima.workers.dev/
+**Código:** licencia AGPL-3.0 (ver [Licencia](#licencia)).
+**Estado:** proyecto independiente, en piloto en Córdoba, Argentina. No es un servicio oficial de emergencia.
 
 ## Cómo está pensada
 
@@ -51,14 +53,17 @@ Además se calculan los cuatro modelos determinísticos (ECMWF, GFS, ICON, GEM) 
 | Pronóstico | Open-Meteo (ECMWF, GFS, ICON, GEM) + ensemble IFS 51 | Principal |
 | Pronóstico | **MET Norway** (`api.met.no`) | Control externo independiente y respaldo si Open-Meteo falla |
 | Direcciones | OpenStreetMap (Photon + Nominatim) + Open-Meteo Geocoding | Búsqueda |
-| Radar | RainViewer | GIF si hay eco |
-| Grilla de lluvia | Open-Meteo (25 puntos alrededor del lugar) | GIF cuando no hay radar |
+| Imagen satelital | NASA GIBS — GOES-19 ABI GeoColor | GIF de 6 cuadros, sin credenciales |
+| Altura de ríos | Estaciones públicas del INA (`alerta.ina.gob.ar`) | Nivel y tendencia; criterio de crecida |
+| Reportes de usuarios | Cruce con radar RainViewer | Validación de lo que la gente ve en su zona |
 
 Si Open-Meteo no responde, la tarjeta se arma con MET Norway y avisa "Datos de respaldo: MET Norway". En "Ver detalles" aparece la línea "Control externo MET Norway" con su nivel, lluvia acumulada y ráfagas; si difiere en dos niveles o más del principal, se marca la discrepancia.
 
-## GIF de radar o pronóstico
+## GIF satelital (GOES-19)
 
-Desde alerta naranja, el botón 🎞️ genera un GIF de 6 cuadros (3 s) con la zona: usa el radar de RainViewer si detecta eco; si no hay cobertura, dibuja el campo de lluvia del modelo en una grilla de 25 puntos y lo rotula "pronóstico", nunca "radar".
+Desde alerta naranja, el botón 🎞️ genera un GIF de 6 cuadros de 560×560 con imagen GOES-19 ABI GeoColor de NASA GIBS: marca de ubicación, escala, hora, logo y nombre ASN 4.0. No se presenta como radar: es imagen satelital de color real.
+
+Se habilita con una alerta meteorológica o con una tormenta detectada, no con una alerta exclusivamente hidrológica: una imagen satelital no muestra el nivel del río. RainViewer se usa solo para cruzar los reportes de los usuarios, no para armar el GIF.
 
 ## Avisos
 
@@ -77,13 +82,16 @@ Desde alerta naranja, el botón 🎞️ genera un GIF de 6 cuadros (3 s) con la 
 | Chequeo | Cron `*/10 * * * *` sobre el ensemble del IFS |
 | Push | Web Push VAPID (P-256 + aes128gcm), servicio FCM/APNs del navegador |
 
-Despliegue:
+Despliegue: copiá `wrangler.example.toml` a `wrangler.toml`, completá tus IDs y cargá los secretos.
 
 ```bash
+npx wrangler secret put OWNER_KEY
+npx wrangler secret put VAPID_PRIVATE
+npx wrangler secret put VAPID_SUBJECT
 npx wrangler deploy
 ```
 
-Secretos del Worker: `VAPID_PRIVATE` y `VAPID_SUBJECT` (la clave pública vive en `wrangler.toml`).
+`wrangler.toml` está en `.gitignore`: la configuración real con claves nunca se publica. La plantilla vive en `wrangler.example.toml`.
 
 ## Estructura
 
@@ -112,7 +120,7 @@ El repositorio no contiene direcciones, teléfonos ni coordenadas. Los lugares s
 
 No reemplaza tu criterio. El granizo es el fenómeno más difícil: la app lo marca como "posible", nunca como certeza, porque sin radar propio no hay forma de confirmarlo. Si el cielo se pone feo, abrí el radar desde "Ver detalles".
 
-Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-Meteo; RainViewer; Blitzortung). No se usan datos de organismos provinciales ni nacionales: no publican verificación estación por estación ni endpoints utilizables.
+Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-Meteo; MET Norway; NASA GIBS; RainViewer; Blitzortung) y estaciones hidrológicas públicas del INA. No hay dependencia operativa de organismos provinciales ni nacionales: si una fuente no publica, la app dice que no hay dato; no lo interpreta como calma.
 
 
 ## Calidad y seguridad
@@ -126,3 +134,16 @@ Las fuentes son modelos y redes independientes (ECMWF, NOAA, DWD, CMC vía Open-
 ### Hidrología: criterio de crecida
 
 Se compara el caudal con su **p95 de 92 días**: +15 % sobre el p95 → señal, +35 % → crecida. Si el INA publica umbral para la estación, se toma como referencia. La lluvia local sólo cuenta para cuencas chicas; el Paraná crece por lluvia a cientos de kilómetros.
+
+## Licencia
+
+El código de ASN 4.0 se publica bajo **GNU Affero General Public License v3.0 o posterior** (AGPL-3.0-or-later, ver [LICENSE](LICENSE)). Podés usarlo, modificarlo y redistribuirlo. Si modificás el código y lo ofrecés como servicio en red, tenés que publicar tu versión bajo la misma licencia.
+
+Esa cláusula es la que impide que alguien tome ASN 4.0, lo cierre y lo convierta en un producto propietario: cualquier mejora que se sirva a usuarios por internet vuelve a la comunidad.
+
+Eso no cubre:
+
+- **Datos de terceros:** Open-Meteo (CC BY 4.0), MET Norway (NLOD / CC BY 4.0), OpenStreetMap (ODbL), NASA GIBS / GOES-19 (dominio público) e INA (datos públicos). Cada fuente mantiene su licencia.
+- **Marca e identidad visual:** "ASN 4.0", "Alerta Super Niño" y el logo no se licencian para uso comercial ni para sugerir respaldo oficial.
+
+La versión anterior, propietaria, queda archivada en [LICENSE-PROPRIETARY.txt](LICENSE-PROPRIETARY.txt) como registro histórico. No se aplica al código publicado a partir de esta versión.
