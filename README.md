@@ -137,7 +137,7 @@ Se compara el caudal con su **p95 de 92 días**: +15 % sobre el p95 → señal, 
 
 ## Licencia
 
-El código de ASN 4.0 se publica bajo **GNU Affero General Public License v3.0 o posterior** (AGPL-3.0-or-later, ver [LICENSE](LICENSE)). Podés usarlo, modificarlo y redistribuirlo. Si modificás el código y lo ofrecés como servicio en red, tenés que publicar tu versión bajo la misma licencia.
+El código de ASN 4.0 se publica bajo **GNU Affero General Public License v3.0 o posterior** (AGPL-3.0-or-later, ver [LICENSE](LICENSE)). Podés usarlo, modificarlo y redistribuirlo. Si modificás el código y lo ofrecés como servicio en red, tenés que publicar tu versión bajo la misma licencia. El aviso de copyright y las licencias de datos están en [NOTICE](NOTICE).
 
 Esa cláusula es la que impide que alguien tome ASN 4.0, lo cierre y lo convierta en un producto propietario: cualquier mejora que se sirva a usuarios por internet vuelve a la comunidad.
 
