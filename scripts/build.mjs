@@ -9,8 +9,12 @@ import { minify } from 'terser';
 import fs from 'node:fs/promises';
 
 const RESERVED = [
-  'S', 'paint', 'refresh', 'save', 'load', 'toast',
-  'openMenu', 'enablePush', 'learnAdd', 'supportPopup', 'supportClose', 'supportInvite'
+  'S', 'paint', 'refresh', 'save', 'load', 'toast', 'aggregate',
+  'openMenu', 'enablePush', 'learnAdd', 'supportPopup', 'supportClose', 'supportInvite',
+  /* las pruebas verifican que una alerta pueda bajar y cómo se sigue */
+  'checkAlert', 'levelInfo', 'trackAlert', 'askTarget',
+  /* las pruebas de ETA siembran el nowcast y repintan la barra */
+  'paintNowcast'
 ];
 
 const FILES = [

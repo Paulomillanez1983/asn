@@ -1,9 +1,14 @@
-﻿/* ASN 4.0 — GIF animado: radar si hay eco, pronóstico del modelo si no */
+﻿/* ASN 4.0 — animación satelital real.
+   Fuente: NASA GIBS, GOES-19 ABI GeoColor, teselas PNG públicas,
+   sin credenciales y con CORS. RainViewer no sirve esta zona (0 cuadros),
+   así que no se usa más para el GIF. */
 (function () {
-  const W = 560, H = 560, Z = 7, TILE = 256, FRAMES = 6, DELAY = 550;
+  const W = 560, H = 560, Z = 7, TILE = 256, MAXF = 6, DELAY = 600;
   const COLORS = ['#34d399', '#fbbf24', '#fb923c', '#f87171', '#c084fc'];
   const LABELS = ['SIN ALERTA', 'ALERTA AMARILLA', 'ALERTA NARANJA', 'ALERTA ROJA', 'ALERTA MORADA'];
   const FONT = 'system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+  const BASE = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/';
+  const CREDIT = 'Satélite GOES-19 · NASA GIBS · color real';
 
   function project(lat, lon, z) {
     const n = Math.pow(2, z), world = TILE * n;
@@ -23,291 +28,221 @@
     });
   }
 
-  function hhmm(unix) {
+  function hhmm(ms) {
     try {
       return new Intl.DateTimeFormat('es-AR', {
         timeZone: 'America/Argentina/Cordoba', hour: '2-digit', minute: '2-digit', hour12: false
-      }).format(new Date(unix * 1000));
+      }).format(new Date(ms));
     } catch (e) { return ''; }
   }
 
-  function frame(ctx, opts) {
-    const { level, place, sub, stamp, foot } = opts;
-    const badge = COLORS[level] || '#fb923c';
+  function ddmm(ms) {
+    try {
+      return new Intl.DateTimeFormat('es-AR', {
+        timeZone: 'America/Argentina/Cordoba', day: '2-digit', month: '2-digit'
+      }).format(new Date(ms));
+    } catch (e) { return ''; }
+  }
 
-    const halo = ctx.createRadialGradient(W / 2, H / 2, 6, W / 2, H / 2, 120);
-    halo.addColorStop(0, 'rgba(255,255,255,.16)');
-    halo.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = halo;
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.strokeStyle = 'rgba(255,255,255,.8)';
-    ctx.lineWidth = 2;
+  function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
-    ctx.arc(W / 2, H / 2, 26, 0, Math.PI * 2);
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function marker(ctx, place) {
+    const cx = W / 2, cy = H / 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,.95)';
+    ctx.lineWidth = 3;
     ctx.stroke();
-
-    ctx.fillStyle = 'rgba(7,13,24,.74)';
-    ctx.fillRect(0, 0, W, 92);
-
-    ctx.fillStyle = badge;
     ctx.beginPath();
-    ctx.arc(30, 32, 8, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
     ctx.fill();
 
+    const name = place.label || 'Mi lugar';
+    ctx.font = '700 15px ' + FONT;
+    const w = ctx.measureText(name).width + 22;
+    const bx = cx - w / 2, by = cy + 20;
+    roundRect(ctx, bx, by, w, 28, 14);
+    ctx.fillStyle = 'rgba(7,13,24,.82)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#eaf2ff';
+    ctx.textAlign = 'center';
+    ctx.fillText(name, cx, by + 19);
+    ctx.textAlign = 'left';
+  }
+
+  function scaleBar(ctx, lat) {
+    const mPerPx = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, Z);
+    const km = 50;
+    const w = Math.round(km * 1000 / mPerPx);
+    const x = 24, y = H - 96;
+    ctx.fillStyle = 'rgba(7,13,24,.62)';
+    roundRect(ctx, x - 10, y - 20, w + 20, 40, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w, y);
+    ctx.moveTo(x, y - 5); ctx.lineTo(x, y + 5);
+    ctx.moveTo(x + w, y - 5); ctx.lineTo(x + w, y + 5);
+    ctx.stroke();
+    ctx.fillStyle = '#dbe6f7';
+    ctx.font = '600 12px ' + FONT;
+    ctx.fillText(km + ' km', x, y + 16);
+  }
+
+  function chrome(ctx, opts) {
+    const { level, stamp, logo, note } = opts;
+    const badge = COLORS[level] || '#fb923c';
+
+    ctx.fillStyle = 'rgba(7,13,24,.88)';
+    ctx.fillRect(0, 0, W, 76);
+    ctx.fillStyle = 'rgba(255,255,255,.10)';
+    ctx.fillRect(0, 76, W, 1);
+    if (logo) ctx.drawImage(logo, 16, 14, 46, 46);
     ctx.fillStyle = '#fff';
-    ctx.font = '700 21px ' + FONT;
-    ctx.fillText(LABELS[level] || 'ALERTA', 48, 39);
+    ctx.font = '800 21px ' + FONT;
+    ctx.fillText('ASN 4.0', 74, 36);
+    ctx.fillStyle = '#9db0c9';
+    ctx.font = '600 12.5px ' + FONT;
+    ctx.fillText('Alerta Super Niño', 74, 56);
 
-    ctx.fillStyle = '#c6d4ec';
-    ctx.font = '600 17px ' + FONT;
-    ctx.fillText(sub.length > 44 ? sub.slice(0, 43) + '…' : sub, 24, 70);
+    ctx.font = '700 12px ' + FONT;
+    const lw = ctx.measureText(LABELS[level] || 'ALERTA').width + 34;
+    const lx = W - lw - 16;
+    roundRect(ctx, lx, 24, lw, 28, 14);
+    ctx.fillStyle = 'rgba(255,255,255,.10)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lx + 12, 38, 5, 0, Math.PI * 2);
+    ctx.fillStyle = badge;
+    ctx.fill();
+    ctx.fillStyle = '#f2f7ff';
+    ctx.fillText(LABELS[level] || 'ALERTA', lx + 23, 42);
 
-    ctx.fillStyle = 'rgba(7,13,24,.74)';
+    if (note) {
+      ctx.font = '600 13px ' + FONT;
+      const nw = ctx.measureText(note).width + 28;
+      roundRect(ctx, (W - nw) / 2, 90, nw, 28, 14);
+      ctx.fillStyle = 'rgba(7,13,24,.80)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.16)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#dbe6f7';
+      ctx.textAlign = 'center';
+      ctx.fillText(note, W / 2, 109);
+      ctx.textAlign = 'left';
+    }
+
+    ctx.fillStyle = 'rgba(7,13,24,.88)';
     ctx.fillRect(0, H - 46, W, 46);
-    ctx.fillStyle = '#9fb2d1';
-    ctx.font = '600 15px ' + FONT;
-    ctx.fillText(stamp, 24, H - 18);
+    ctx.fillStyle = '#c6d4ec';
+    ctx.font = '700 13px ' + FONT;
+    ctx.fillText(stamp, 20, H - 19);
     ctx.fillStyle = '#7d90b3';
-    ctx.font = '600 14px ' + FONT;
-    ctx.fillText(foot, W - 250, H - 18);
+    ctx.font = '600 9.5px ' + FONT;
+    ctx.textAlign = 'right';
+    ctx.fillText(CREDIT, W - 18, H - 19);
+    ctx.textAlign = 'left';
   }
 
   function encode(gif, ctx) {
     const { data } = ctx.getImageData(0, 0, W, H);
-    const palette = quantize(data, 128);
+    const palette = quantize(data, 200);
     const index = applyPalette(data, palette);
     gif.writeFrame(index, W, H, { palette, delay: DELAY });
   }
 
-  async function radarTiles(meta, path, left, top, x0, y0, x1, y1) {
-    const cols = x1 - x0 + 1;
-    const list = await Promise.all(
-      Array.from({ length: cols * (y1 - y0 + 1) }, (_, k) => {
-        const x = x0 + (k % cols), y = y0 + Math.floor(k / cols);
-        return loadImg(`${meta.host}${path}/256/${Z}/${x}/${y}/2/1_1.png`)
-          .then(img => ({ img, x, y }))
-          .catch(() => null);
-      })
-    );
-    return { list, cols };
+  /* GIBS pide la hora al minuto exacto en ISO, terminada en Z */
+  function iso(ms) {
+    const d = new Date(ms);
+    const p = n => String(n).padStart(2, '0');
+    return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) + 'T' +
+      p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':00Z';
   }
 
-  async function build(place, level, phen) {
+  async function build(place, level, phen, note) {
     if (typeof window.GIFEncoder !== 'function') throw new Error('codificador no disponible');
 
-    const meta = await fetch('/api/radar', { cache: 'no-store' })
-      .then(r => r.json());
-    const frames = ((meta.radar && meta.radar.past) || []).slice(-FRAMES);
-    if (!frames.length) return buildModel(place, level, phen);
-
     const c = project(place.lat, place.lon, Z);
     const left = c.x - W / 2, top = c.y - H / 2;
     const x0 = Math.floor(left / TILE), y0 = Math.floor(top / TILE);
     const x1 = Math.floor((left + W) / TILE), y1 = Math.floor((top + H) / TILE);
 
-    /* ¿hay eco? se decide con el primer cuadro */
-    const probe = await radarTiles(meta, frames[0].path, left, top, x0, y0, x1, y1);
-    const probeCanvas = document.createElement('canvas');
-    probeCanvas.width = W; probeCanvas.height = H;
-    const pctx = probeCanvas.getContext('2d', { willReadFrequently: true });
-    probe.list.forEach(it => { if (it) pctx.drawImage(it.img, it.x * TILE - left, it.y * TILE - top); });
-    const px = pctx.getImageData(0, 0, W, H).data;
-    let hits = 0;
-    for (let i = 3; i < px.length; i += 4) if (px[i] > 12) hits++;
+    const coords = [];
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) coords.push({ x, y });
 
-    if (hits < 500) {
-      try {
-        return await buildSatellite(place, level, phen);
-      } catch (e) {
-        return buildModel(place, level, phen, 'sin eco de radar');
-      }
+    const frameAt = async (ms) => {
+      const t = iso(ms);
+      const imgs = await Promise.all(coords.map(p => loadImg(
+        BASE + t + '/GoogleMapsCompatible_Level7/' + Z + '/' + p.y + '/' + p.x + '.png'
+      ).catch(() => null)));
+      return imgs.filter(Boolean).length >= Math.ceil(coords.length * 0.7) ? imgs : null;
+    };
+
+    /* se retrocede de 10 en 10 hasta juntar los cuadros que existan */
+    const step = 10 * 60 * 1000;
+    const base = Math.floor(Date.now() / step) * step;
+    const frames = [];
+    for (let i = 0; i < 15 && frames.length < MAXF; i++) {
+      const ms = base - i * step;
+      const imgs = await frameAt(ms);
+      if (imgs) frames.push({ ms, imgs });
     }
+    frames.reverse();
 
+    const logo = await loadImg('icon-192.png').catch(() => null);
     const gif = GIFEncoder();
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
+
+    if (!frames.length) {
+      ctx.fillStyle = '#0b1220';
+      ctx.fillRect(0, 0, W, H);
+      marker(ctx, place);
+      chrome(ctx, { level, logo, stamp: 'Sin imagen satelital ahora', note: note || 'La NASA no respondió' });
+      encode(gif, ctx);
+      gif.finish();
+      return new Blob([gif.bytes()], { type: 'image/gif' });
+    }
 
     for (const f of frames) {
-      const bg = ctx.createLinearGradient(0, 0, 0, H);
-      bg.addColorStop(0, '#0b1a2b');
-      bg.addColorStop(1, '#070d18');
-      ctx.fillStyle = bg;
+      ctx.fillStyle = '#0b1220';
+      ctx.fillRect(0, 0, W, H);
+      coords.forEach((p, i) => {
+        if (f.imgs[i]) ctx.drawImage(f.imgs[i], p.x * TILE - left, p.y * TILE - top);
+      });
+
+      const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.34, W / 2, H / 2, H * 0.74);
+      vg.addColorStop(0, 'rgba(3,7,14,0)');
+      vg.addColorStop(1, 'rgba(3,7,14,.42)');
+      ctx.fillStyle = vg;
       ctx.fillRect(0, 0, W, H);
 
-      const layer = document.createElement('canvas');
-      layer.width = W; layer.height = H;
-      const lctx = layer.getContext('2d');
-      lctx.globalAlpha = 0.9;
-      const t = await radarTiles(meta, f.path, left, top, x0, y0, x1, y1);
-      t.list.forEach(it => { if (it) lctx.drawImage(it.img, it.x * TILE - left, it.y * TILE - top); });
-      ctx.drawImage(layer, 0, 0);
-
-      frame(ctx, {
-        level, place,
-        sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
-        stamp: 'ASN 4.0 · radar ' + hhmm(f.time),
-        foot: 'ASN 4.0 · radar'
+      marker(ctx, place);
+      scaleBar(ctx, place.lat);
+      chrome(ctx, {
+        level, logo, note: note || '',
+        stamp: 'Satélite ' + hhmm(f.ms) + ' · ' + ddmm(f.ms)
       });
-      encode(gif, ctx);
-    }
-
-    gif.finish();
-    return new Blob([gif.bytes()], { type: 'image/gif' });
-  }
-
-  function gibsUrl(time, x, y) {
-    return 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/' +
-      time + '/GoogleMapsCompatible_Level7/' + Z + '/' + y + '/' + x + '.png';
-  }
-
-  async function latestGibsTime(x, y) {
-    const now = Date.now();
-    for (let k = 1; k <= 14; k++) {
-      const d = new Date(now - k * 10 * 60 * 1000);
-      d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
-      const iso = d.toISOString().replace('.000Z', 'Z');
-      try {
-        const r = await fetch(gibsUrl(iso, x, y), { method: 'GET' });
-        if (r.ok) return iso;
-      } catch (e) { }
-    }
-    return null;
-  }
-
-  async function buildSatellite(place, level, phen) {
-    const c = project(place.lat, place.lon, Z);
-    const left = c.x - W / 2, top = c.y - H / 2;
-    const x0 = Math.floor(left / TILE), y0 = Math.floor(top / TILE);
-    const x1 = Math.floor((left + W) / TILE), y1 = Math.floor((top + H) / TILE);
-    const cx = Math.floor(c.x / TILE), cy = Math.floor(c.y / TILE);
-
-    const latest = await latestGibsTime(cx, cy);
-    if (!latest) throw new Error('satélite no disponible');
-
-    const base = new Date(latest).getTime();
-    const times = [];
-    for (let i = FRAMES - 1; i >= 0; i--) {
-      times.push(new Date(base - i * 10 * 60 * 1000).toISOString().replace('.000Z', 'Z'));
-    }
-
-    const gif = GIFEncoder();
-    const cv = document.createElement('canvas');
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext('2d', { willReadFrequently: true });
-
-    let prev = null;
-    let prevTime = null;
-    for (const time of times) {
-      const jobs = [];
-      for (let x = x0; x <= x1; x++) {
-        for (let y = y0; y <= y1; y++) {
-          jobs.push(loadImg(gibsUrl(time, x, y)).then(img => ({ img, x, y })).catch(() => null));
-        }
-      }
-      const loaded = await Promise.all(jobs);
-      const ok = loaded.filter(Boolean);
-
-      let stampTime = time;
-      if (!ok.length && prev) {
-        ctx.drawImage(prev, 0, 0);
-        stampTime = prevTime || time;
-      } else {
-        const bg = ctx.createLinearGradient(0, 0, 0, H);
-        bg.addColorStop(0, '#0a1626');
-        bg.addColorStop(1, '#060c16');
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, W, H);
-        loaded.forEach(it => { if (it) ctx.drawImage(it.img, it.x * TILE - left, it.y * TILE - top); });
-        if (ok.length) {
-          prev = document.createElement('canvas');
-          prev.width = W;
-          prev.height = H;
-          prev.getContext('2d').drawImage(cv, 0, 0);
-          prevTime = time;
-        }
-      }
-
-      frame(ctx, {
-        level, place,
-        sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
-        stamp: 'ASN 4.0 · satélite ' + stampTime.slice(11, 16) + ' UTC',
-        foot: 'ASN 4.0 · satélite'
-      });
-      encode(gif, ctx);
-    }
-
-    gif.finish();
-    return new Blob([gif.bytes()], { type: 'image/gif' });
-  }
-
-  async function buildModel(place, level, phen, reason) {
-    const STEP = 0.25, N = 5;
-    const lats = [], lons = [];
-    for (let i = -2; i <= 2; i++) {
-      for (let j = -2; j <= 2; j++) {
-        lats.push((place.lat + i * STEP).toFixed(3));
-        lons.push((place.lon + j * STEP).toFixed(3));
-      }
-    }
-
-    const u = '/api/wxmodel?lats=' + encodeURIComponent(lats.join(',')) +
-      '&lons=' + encodeURIComponent(lons.join(','));
-    const raw = await fetch(u, { cache: 'no-store' }).then(r => r.json());
-    const pts = Array.isArray(raw) ? raw : [raw];
-    if (!pts.length || !pts[0].hourly) throw new Error('sin grilla del modelo');
-
-    const times = pts[0].hourly.time || [];
-    const cos = Math.cos(place.lat * Math.PI / 180);
-    const pxPerDeg = W; /* 1° de ancho */
-
-    const gif = GIFEncoder();
-    const cv = document.createElement('canvas');
-    cv.width = W; cv.height = H;
-    const ctx = cv.getContext('2d', { willReadFrequently: true });
-
-    for (let h = 0; h < Math.min(6, times.length); h++) {
-      const bg = ctx.createLinearGradient(0, 0, 0, H);
-      bg.addColorStop(0, '#0b1a2b');
-      bg.addColorStop(1, '#070d18');
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-
-      pts.forEach((pt, idx) => {
-        const i = Math.floor(idx / N) - 2;
-        const j = (idx % N) - 2;
-        const mm = (pt.hourly.precipitation || [])[h] || 0;
-        if (mm < 0.1) return;
-
-        const dx = j * STEP * pxPerDeg * cos;
-        const dy = -i * STEP * pxPerDeg;
-        const rgb = mm < 0.5 ? '56,189,248' : mm < 2 ? '59,130,246' : mm < 5 ? '99,102,241' : '168,85,247';
-        const rad = 86;
-        const g = ctx.createRadialGradient(W / 2 + dx, H / 2 + dy, 4, W / 2 + dx, H / 2 + dy, rad);
-        g.addColorStop(0, 'rgba(' + rgb + ',.72)');
-        g.addColorStop(1, 'rgba(' + rgb + ',0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(W / 2 + dx, H / 2 + dy, rad, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      frame(ctx, {
-        level, place,
-        sub: (place.label || 'Mi lugar') + (place.addr ? ' · ' + place.addr : ''),
-        stamp: 'ASN 4.0 · pronóstico ' + String(times[h] || '').slice(11, 16),
-        foot: 'ASN 4.0 · modelo'
-      });
-
-      ctx.fillStyle = 'rgba(7,13,24,.6)';
-      ctx.fillRect(0, 96, W, 26);
-      ctx.fillStyle = '#9fb2d1';
-      ctx.font = '600 13px ' + FONT;
-      ctx.textAlign = 'center';
-      ctx.fillText(reason || 'campo de lluvia del modelo', W / 2, 114);
-      ctx.textAlign = 'left';
-
       encode(gif, ctx);
     }
 
@@ -317,3 +252,4 @@
 
   window.ASNRadar = { build };
 })();
+

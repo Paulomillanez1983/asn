@@ -149,7 +149,7 @@ const HYDRO_ITATI = {
   headline: 'Crecida grave',
   plain: 'El agua ya pasó el nivel de evacuación y la zona baja está bajo agua.',
   history: 'No se veía un nivel así desde 1998.',
-  advice: 'Si estás en zona baja o cerca de la costa, salí ahora.',
+  advice: 'Si estás en zona baja o cerca de la costa, buscá un lugar seguro y seguí las indicaciones de Defensa Civil.',
   slope: 0.29, proj48: 8.75,
   trend: { key: 'sube', word: 'subiendo rápido', arrow: '⬆' },
   peak: { v: 8.17, date: '2026-10-19T03:00:00.000Z' },
@@ -166,8 +166,10 @@ test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async 
     paint();
   }, HYDRO_ITATI);
 
-  // encabezado: la crecida manda sobre el clima tranquilo
-  await expect(page.locator('#sub')).toContainText('Alerta Super Niño · Crecida grave');
+  // el encabezado es la marca; el estado global lo cuenta la franja de arriba.
+  // Antes decía "Crecida grave" acá y contradecía la tarjeta que estabas mirando.
+  await expect(page.locator('#sub')).toContainText('Alerta Super Niño 4.0');
+  await expect(page.locator('.banner').first()).toContainText('Crecida grave');
 
   const card = page.locator('.hero.flood4');
   await expect(card).toHaveCount(1);
@@ -177,18 +179,23 @@ test('la crecida en nivel 4 pinta la tarjeta y no dice "todo tranquilo"', async 
   await expect(card.locator('.chip3h')).toContainText('Crecida grave');
   await expect(card).not.toContainText('Todo tranquilo');
   await expect(card).not.toContainText('Buen momento para estar afuera');
-  await expect(card).toContainText('salí ahora');
+  await expect(card).toContainText('seguí las indicaciones de Defensa Civil');
+  // la app informa y no decide por la persona: no ordena salir ni quedarse
+  await expect(card).not.toContainText('salí ahora');
+  await expect(card).not.toContainText('hay que salir');
   await expect(card.locator('.hdetail')).toContainText('desde 1998');
 
   // bloque de seguimiento: nivel, tendencia, escala y serie histórica
   const river = card.locator('.river');
   await expect(river).toBeVisible();
-  await expect(river.locator('.rnow')).toHaveText('8,17 m');
+  await expect(river).toContainText('8,17 m');
   await expect(river.locator('.rtrend')).toContainText('0,29 m/día');
-  await expect(river.locator('.rmark')).toHaveCount(1);
+  // el marcador horizontal se reemplazó por el termómetro vertical
+  await expect(river.locator('.rtrend')).toBeVisible();
   await expect(river.locator('.rproj')).toContainText('8,75');
   await expect(river.locator('.rspark polyline')).toHaveCount(1);
-  await expect(river.locator('.rleg')).toContainText('evacuación');
+  // la leyenda de colores se reemplazó por una frase en palabras
+  await expect(river).toContainText('nivel de evacuación');
 
   // y el banner de arriba también
   await expect(page.getByText('Crecida grave · Casa')).toBeVisible();
@@ -265,9 +272,9 @@ test('la invitación a apoyar aparece sola, pero nunca sobre una alerta', async 
   await expect(sheet).toBeHidden();
 });
 
-test('con alerta la invitación pasa a barra chica, y en nivel 4 no aparece', async ({ page }) => {
+test('con alerta amarilla la invitación pasa a barra chica, y desde nivel 2 no aparece', async ({ page }) => {
   await page.goto('/');
-  await seed(page, 2);
+  await seed(page, 1);
 
   await page.evaluate(() => {
     localStorage.removeItem('asn.support');
@@ -277,7 +284,17 @@ test('con alerta la invitación pasa a barra chica, y en nivel 4 no aparece', as
   await expect(page.locator('#supportBar')).toBeVisible();
   await expect(page.locator('#supportSheet')).toBeHidden();
 
-  // en evacuación no se pide nada
+  // regla de producto: desde nivel 2 (clima o río) no se pide nada
+  await page.evaluate(() => {
+    localStorage.removeItem('asn.support');
+    S.data.t1.level = 2;
+    paint();
+    supportInvite();
+  });
+  await expect(page.locator('#supportBar')).toBeHidden();
+  await expect(page.locator('#supportSheet')).toBeHidden();
+
+  // en evacuación tampoco
   await page.evaluate(() => {
     localStorage.removeItem('asn.support');
     const bar = document.getElementById('supportBar'); if (bar) bar.hidden = true;
@@ -286,6 +303,7 @@ test('con alerta la invitación pasa a barra chica, y en nivel 4 no aparece', as
     supportInvite();
   });
   await expect(page.locator('#supportBar')).toBeHidden();
+  await expect(page.locator('#supportSheet')).toBeHidden();
 });
 
 test('la tarjeta para compartir usa el menú del teléfono', async ({ page }) => {
@@ -423,4 +441,386 @@ test('el sonido de alerta suena al probarlo y se recuerda si está apagado', asy
   await page.locator('#toggleSound').click();
   await expect(page.locator('#toggleSound')).toHaveText('Desactivar');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('asn.v1')).sound)).toBe(true);
+});
+
+test('sin modelos utilizables la tarjeta dice "sin dato" y no "tranquilo"', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  // ensemble vacío: Open-Meteo no devolvió ninguna serie por modelo (ni member*)
+  const agg = await page.evaluate(() => {
+    const a = aggregate({ time: ['2026-10-19T12:00'] }, null);
+    return { sinDato: !!a.sinDato, level: a.level };
+  });
+  expect(agg.sinDato).toBe(true);
+  expect(agg.level).toBe(0);
+
+  await page.evaluate(() => {
+    const a = aggregate({ time: ['2026-10-19T12:00'] }, null);
+    a.times = ['2026-10-19T12:00', '2026-10-19T13:00'];
+    a.current = { temperature_2m: 18, wind_gusts_10m: 10, weather_code: 0, precipitation: 0 };
+    S.data.t1 = a;
+    paint();
+  });
+
+  const card = page.locator('.hero.nodata');
+  await expect(card).toHaveCount(1);
+  await expect(card.locator('.title')).toHaveText('Sin dato');
+  await expect(card).not.toContainText('ranquilo');
+  await expect(card).not.toContainText('Buen momento para estar afuera');
+  await expect(page.locator('#sub')).not.toContainText('Todo tranquilo');
+});
+
+test('cuando los datos dicen despejado, la alerta baja y se avisa', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__notifs = [];
+    try { Object.defineProperty(Notification, 'permission', { get: () => 'granted' }); } catch (e) { }
+    try {
+      ServiceWorkerRegistration.prototype.showNotification = function (t, o) {
+        window.__notifs.push({ title: t, body: (o && o.body) || '', icon: (o && o.icon) || '', badge: (o && o.badge) || '' });
+        return Promise.resolve();
+      };
+    } catch (e) { }
+  });
+  await page.goto('/');
+  await seed(page, 0);
+  await page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller !== null);
+
+  const out = await page.evaluate(async () => {
+    const wait = () => new Promise(r => setTimeout(r, 250));
+    S.last.t1 = { level: 1, at: Date.now(), ph: 'lluvia' };
+    const d = S.data.t1;
+    d.level = 0; d.storm = false; d.sinDato = false; d.hydro = null;
+    checkAlert(S.places[0], d);
+    await wait();
+    const bajada = window.__notifs.slice();
+    window.__notifs.length = 0;
+
+    // ahora sin dato: no se puede afirmar calma, pero el aviso viejo igual se retira
+    S.last.t1 = { level: 2, at: Date.now(), ph: 'lluvia' };
+    d.level = 0; d.sinDato = true;
+    checkAlert(S.places[0], d);
+    await wait();
+    const sinDato = window.__notifs.slice();
+    return { bajada, sinDato, guardado: S.last.t1 };
+  });
+
+  expect(out.bajada.length).toBe(1);
+  expect(out.bajada[0].title).toContain('Sin alerta');
+  expect(out.bajada[0].title).toContain('Casa');
+  // el ícono grande va en color y el chico monocromo
+  expect(out.bajada[0].icon).toBe('icon-192.png');
+  expect(out.bajada[0].badge).toBe('notif-96.png');
+
+  expect(out.sinDato.length).toBe(1);
+  expect(out.sinDato[0].title).toContain('Sin dato');
+  expect(out.sinDato[0].body).toContain('no podemos confirmar calma');
+  expect(out.guardado.level).toBe(0);
+});
+
+test('la tarjeta no muestra nombres de modelos ni conteos de fuentes', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 2);
+
+  const txt = await page.evaluate(() => {
+    const d = S.data.t1;
+    d.level = 2;
+    d.models.forEach(m => { m.has = true; m.l = 2; m.rain = true; });
+    d.ensOk = false;
+    d.met = { level: 2, rain3: 20, gustKmh: 70 };
+    paint();
+    /* lo que se ve sin abrir "Ver detalles" */
+    const c = document.querySelector('.hero').cloneNode(true);
+    c.querySelectorAll('details').forEach(x => x.remove());
+    return c.textContent;
+  });
+
+  // lo técnico es interno: a la persona se le habla del aviso, no del método
+  ['ECMWF', 'GFS', 'ICON', 'GEM', 'Ensemble', 'MET Norway', 'De dónde sale', 'fuentes']
+    .forEach(w => expect(txt).not.toContain(w));
+  expect(txt).toContain('Alerta');
+});
+
+test('la voz de una crecida informa y no ordena evacuar', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__spoken = [];
+    try {
+      Object.defineProperty(Notification, 'permission', { get: () => 'granted' });
+    } catch (e) { }
+    try {
+      ServiceWorkerRegistration.prototype.showNotification = function () { return Promise.resolve(); };
+    } catch (e) { }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.speak = u => window.__spoken.push(u.text);
+      window.speechSynthesis.cancel = () => { };
+    }
+    class FakeUtter {
+      constructor(t) { this.text = t; }
+    }
+    window.SpeechSynthesisUtterance = FakeUtter;
+  });
+  await page.goto('/');
+  await seed(page, 0);
+
+  const out = await page.evaluate(async () => {
+    S.voice = true;
+    const d = S.data.t1;
+    d.hydro = null;
+    d.level = 4;
+    d.sinDato = false;
+    S.last.t1 = { level: 0, at: 0, ph: '' };
+    checkAlert(S.places[0], d);
+    await new Promise(r => setTimeout(r, 1800));
+    return window.__spoken;
+  });
+
+  const dicho = (out || []).join(' | ');
+  expect(dicho).toContain('Riesgo extremo');
+  expect(dicho).not.toContain('salí');
+  expect(dicho).not.toContain('no vuelvas');
+  expect(dicho).not.toContain('hay que evacuar');
+});
+
+test('el pop-up confirma la respuesta y se cierra aunque el radar no conteste', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 1);
+
+  await page.evaluate(() => {
+    S.askPlace = 't1';
+    document.getElementById('askResult').hidden = true;
+    document.getElementById('askSheet').hidden = false;
+  });
+
+  await page.click('#askSheet [data-askans="no"]');
+
+  // la confirmación tiene que aparecer al instante, no depender del radar
+  await expect(page.locator('#askResult')).toContainText('Anotado');
+  await expect(page.locator('#askSheet [data-askans="no"]')).toHaveClass(/picked/);
+  await expect(page.locator('#askSheet')).toBeHidden({ timeout: 9000 });
+
+  const fb = await page.evaluate(() => (S.feedback || []).slice(-1)[0]);
+  expect(fb.a).toBe('no');
+});
+
+test('desde una alerta de clima se abre el radar animado', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 2);
+
+  const btn = page.locator('[data-gif]').first();
+  await expect(btn).toContainText('radar');
+  await btn.click();
+  await expect(page.locator('#gifSheet')).toBeVisible();
+});
+
+test('el seguimiento dice desde cuándo sigue y cómo termina', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  const out = await page.evaluate(() => {
+    const d = S.data.t1;
+    d.level = 1; d.storm = false; d.sinDato = false; d.hydro = null;
+    S.track.t1 = {
+      since: Date.now() - 40 * 60000, level: 1, peak: 1, ph: 'lluvia',
+      checks: 1, at: Date.now(), hist: [1]
+    };
+    trackAlert(S.places[0], d);   // segundo control: sigue en 1
+    paint();
+    const activo = document.querySelector('.hero').textContent;
+
+    d.level = 0;
+    trackAlert(S.places[0], d);   // dejó de existir
+    paint();
+    const terminado = [...document.querySelectorAll('.hero')].map(x => x.textContent).join(' | ');
+    return { activo, terminado, track: S.track.t1 };
+  });
+
+  expect(out.activo).toContain('El aviso sigue');
+  expect(out.activo).toContain('desde las');
+  expect(out.track.level).toBe(0);
+  expect(out.terminado).toContain('El aviso terminó');
+});
+
+test('el pop-up pregunta una sola vez por episodio y no en rojo', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  const out = await page.evaluate(() => {
+    const d = S.data.t1;
+    d.level = 1; d.sinDato = false; d.error = false;
+    S.track.t1 = { since: Date.now() - 30 * 60000, level: 1, peak: 1, ph: 'lluvia', checks: 3, hist: [1, 1, 1] };
+
+    const primero = !!askTarget();                 // alerta con 30 min: pregunta
+    S.track.t1.askedAt = Date.now();
+    const repetido = !!askTarget();                // ya preguntado en este episodio
+
+    S.track.t1 = { since: Date.now() - 30 * 60000, level: 3, peak: 3, ph: 'lluvia', checks: 3, hist: [3] };
+    d.level = 3;
+    const rojo = !!askTarget();                    // en rojo no se pregunta
+
+    d.level = 1;
+    S.track.t1 = { since: Date.now() - 2 * 60000, level: 1, peak: 1, ph: 'lluvia', checks: 1, hist: [1] };
+    const recien = !!askTarget();                  // recién empieza: esperar
+
+    d.level = 0;
+    S.track.t1 = { since: Date.now() - 30 * 60000, level: 0, ended: Date.now(), peak: 1, ph: 'lluvia' };
+    const sinAlerta = !!askTarget();
+
+    return { primero, repetido, rojo, recien, sinAlerta };
+  });
+
+  expect(out.primero).toBe(true);
+  expect(out.repetido).toBe(false);
+  expect(out.rojo).toBe(false);
+  expect(out.recien).toBe(false);
+  expect(out.sinAlerta).toBe(false);
+});
+
+test('un nulo de lluvia no se lee como cero', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  const out = await page.evaluate(() => {
+    const H = {
+      time: ['2026-10-19T12:00'],
+      precipitation_ecmwf_ifs025: [null, null, null],
+      wind_gusts_10m_ecmwf_ifs025: [20, 20, 20],
+      cape_ecmwf_ifs025: [1200, 1100, 1000]
+    };
+    const a = aggregate(H, null);
+    return { sinDato: !!a.sinDato, level: a.level, storm: !!a.storm, rainModels: a.rainModels };
+  });
+  // sin una sola hora con dato no se puede afirmar calma
+  expect(out.sinDato).toBe(true);
+  expect(out.level).toBe(0);
+  expect(out.rainModels).toBe(0);
+});
+
+test('la inestabilidad sola no declara alerta si nadie pronostica lluvia', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  // caso real del 21/10: cielo despejado, CAPE 1050, ensemble caído (429)
+  const out = await page.evaluate(() => {
+    const H = {
+      time: ['2026-10-19T12:00'],
+      precipitation_ecmwf_ifs025: [0, 0, 0],
+      wind_gusts_10m_ecmwf_ifs025: [28, 25, 23],
+      cape_ecmwf_ifs025: [620, 600, 560],
+      precipitation_gem_seamless: [0, 0, 0],
+      wind_gusts_10m_gem_seamless: [21, 20, 19],
+      cape_gem_seamless: [1050, 920, 750]
+    };
+    const a = aggregate(H, null);
+    return { level: a.level, storm: !!a.storm, ensOk: !!a.ensOk, sinDato: !!a.sinDato };
+  });
+  expect(out.sinDato).toBe(false);
+  expect(out.ensOk).toBe(false);
+  expect(out.storm).toBe(false);
+  expect(out.level).toBe(0);
+});
+
+test('con lluvia pronosticada la tormenta sí se declara', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+
+  const out = await page.evaluate(() => {
+    const H = {
+      time: ['2026-10-19T12:00'],
+      precipitation_ecmwf_ifs025: [6, 8, 5],
+      wind_gusts_10m_ecmwf_ifs025: [30, 35, 30],
+      cape_ecmwf_ifs025: [1400, 1300, 1200],
+      precipitation_gfs_seamless: [5, 7, 4],
+      wind_gusts_10m_gfs_seamless: [25, 28, 25],
+      cape_gfs_seamless: [1200, 1100, 1000]
+    };
+    const a = aggregate(H, null);
+    return { level: a.level, storm: !!a.storm, rainModels: a.rainModels };
+  });
+  expect(out.rainModels).toBeGreaterThanOrEqual(2);
+  expect(out.storm).toBe(true);
+  expect(out.level).toBeGreaterThanOrEqual(1);
+});
+
+
+
+function ncStorm(o = {}) {
+  return {
+    lat: o.lat ?? -31.29,
+    lon: o.lon ?? -64.65,
+    tb: 210,
+    km2: 900,
+    confianza: o.confianza ?? 'alta',
+    movimiento: o.movimiento ?? { kmh: 60, rumbo: 90, giro: 8, cuadros: 3, llega: [] }
+  };
+}
+
+async function seedNc(page, storm, sinDato) {
+  await seed(page, 0);
+  await page.evaluate(({ storm, sinDato }) => {
+    S.nc = { generado: new Date().toISOString(), tormentas: storm ? [storm] : [] };
+    if (sinDato) S.data.t1.sinDato = true;
+    paintNowcast();
+    paint();
+  }, { storm, sinDato });
+}
+
+test('la tarjeta muestra la ETA solo con vector coherente', async ({ page }) => {
+  await page.goto('/');
+  await seedNc(page, ncStorm());
+  const bar = page.locator('#ncBar');
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText('llegaría en ~');
+  await expect(page.locator('[data-gif="t1"]')).toBeVisible();
+});
+
+test('sin vector coherente hay distancia y ninguna hora', async ({ page }) => {
+  await page.goto('/');
+  await seedNc(page, ncStorm({
+    confianza: 'baja',
+    movimiento: { descartado: 'rumbo inestable (giro=89)' }
+  }));
+  const bar = page.locator('#ncBar');
+  await expect(bar).toContainText('Tormenta a');
+  await expect(bar).not.toContainText('llegaría');
+  await expect(page.locator('[data-gif="t1"]')).toHaveCount(0);
+});
+
+test('si se está formando encima no se inventa una hora', async ({ page }) => {
+  await page.goto('/');
+  await seedNc(page, ncStorm({ lat: -31.30, lon: -64.32 }));
+  const bar = page.locator('#ncBar');
+  await expect(bar).toContainText('formándose sobre');
+  await expect(bar).not.toContainText('llegaría');
+  await expect(page.locator('[data-gif="t1"]')).toHaveCount(0);
+});
+
+test('sin dato de clima el ETA no habilita el GIF', async ({ page }) => {
+  await page.goto('/');
+  await seedNc(page, ncStorm(), true);
+  await expect(page.locator('#ncBar')).toContainText('llegaría en ~');
+  await expect(page.locator('[data-gif="t1"]')).toHaveCount(0);
+});
+
+test('el dictamen se muestra en la tarjeta y escapa texto externo', async ({ page }) => {
+  await page.goto('/');
+  await seed(page, 0);
+  await page.evaluate(() => {
+    S.data.t1.dict = {
+      ok: true, estado: 'atencion', titulo: 'Conviene mirar',
+      texto: 'Hay señales parciales: 2 de 3 fuentes.', acuerdo: 75,
+      fuentes_validas: 3, fuentes_totales: 4,
+      votos: [
+        { fuente: 'Nivel del río', voto: 2, detalle: '<img src=x onerror="window.__xss=1">' },
+        { fuente: 'Lluvia medida en la cuenca', voto: 1, detalle: '3 de 5 pluviómetros' },
+        { fuente: 'Suelo cargado', voto: 0, detalle: 'acumulado de la semana' }
+      ],
+      nota: '<b>no</b>'
+    };
+    paint();
+  });
+  await expect(page.locator('#view')).toContainText('Cómo se llegó a esto');
+  await expect(page.locator('#view')).toContainText('Nivel del río');
+  await expect(page.locator('#view')).toContainText('Conviene mirar');
+  expect(await page.locator('img[src="x"]').count()).toBe(0);
+  expect(await page.evaluate(() => window.__xss || 0)).toBe(0);
 });

@@ -1,5 +1,6 @@
-﻿const CACHE = 'asn-v77';
-const SHELL = ['./', 'index.html', 'app.js', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4', 'logo-mark.svg?v=5'];
+﻿const CACHE = 'asn-v111';
+const SHELL = ['./', 'index.html', 'app.js?v=107', 'manifest.json', 'icon-192.png?v=4', 'icon-512.png?v=4',
+  'notif-96.png', 'notif-192.png', 'logo-mark.svg?v=5'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -34,7 +35,7 @@ self.addEventListener('fetch', e => {
   }
 
   if (sameOrigin) {
-    // red primero (código siempre al día), caché como respaldo sin conexión
+    // red primero (c?digo siempre al d?a), cach? como respaldo sin conexi?n
     e.respondWith(
       fetch(req).then(r => {
         if (r.ok) caches.open(CACHE).then(c => c.put(req, r.clone()));
@@ -61,8 +62,8 @@ self.addEventListener('push', e => {
   const kind = MAP[d.kind] || 'alert';
   const level = Number(d.level || 0);
 
-  /* la vibración es lo único que el sistema deja elegir en una notificación:
-     un patrón largo y repetido para que se distinga del resto de las apps */
+  /* la vibraci?n es lo ?nico que el sistema deja elegir en una notificaci?n:
+     un patr?n largo y repetido para que se distinga del resto de las apps */
   const vib = level >= 4 ? [700, 180, 700, 180, 700, 180, 1100]
     : level >= 3 ? [600, 150, 600, 150, 900]
       : kind === 'flood' ? [420, 140, 420, 140, 420]
@@ -72,15 +73,18 @@ self.addEventListener('push', e => {
   e.waitUntil(Promise.all([
     self.registration.showNotification(title, {
       body,
-      icon: 'icon-192.png',
-      badge: 'badge-' + kind + '.png',
+      /* el ícono grande va en color; el chico (badge) va monocromo porque
+         Android lo pinta de blanco y un blanco sobre blanco se ve como
+         un cuadrado vacío */
+      icon: (d.icon || 'icon-192.png'),
+      badge: (d.badge || 'notif-96.png'),
       vibrate: vib,
       requireInteraction: level >= 2,
       renotify: true,
       tag: d.tag || ('asn-' + kind),
       data: { url: d.url || './', speech: d.speech || d.title || '', kind }
     }),
-    /* si la app está abierta, el tono propio lo pone la página */
+    /* si la app est? abierta, el tono propio lo pone la p?gina */
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then(list => list.forEach(c => c.postMessage({ type: 'alert-sound', level, kind })))
   ]));
@@ -104,6 +108,13 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
+
+
+
+
+
+
 
 
 

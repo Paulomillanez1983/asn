@@ -31,7 +31,7 @@ const S = {
   places: [], last: {}, feedback: [],
   data: {}, updated: 0, busy: false, view: 'home', results: [],
   askFor: null, query: '', canInstall: false, hideInstall: false, hideNotify: false,
-  askPlace: null, radarResult: null, learn: {}, pushActive: false,
+  askPlace: null, radarResult: null, learn: {}, track: {}, pushActive: false, ownerTech: false, healthBad: 0, myStars: 0, ownerKey: '', metricsPub: null, metricsOwner: null, deviceId: '', ownerOk: false, ownerForm: false,
   voice: true, sound: true, addKind: 'casa', editId: null, editKind: 'casa', rivers: {},
   geoAsked: false, travel: null, travelSkip: {}
 };
@@ -62,6 +62,12 @@ function load() {
   });
   S.feedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   S.last = raw.last && typeof raw.last === 'object' ? raw.last : {};
+  S.track = raw.track && typeof raw.track === 'object' ? raw.track : {};
+  S.ownerTech = !!raw.ownerTech;
+  S.myStars = Number(raw.myStars) || 0;
+  S.ownerKey = typeof raw.ownerKey === 'string' ? raw.ownerKey : '';
+  S.deviceId = raw.deviceId || (window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  S.ownerOk = !!raw.ownerOk;
   S.learn = raw.learn && typeof raw.learn === 'object' ? raw.learn : {};
   if (raw.voice === false) S.voice = false;
   if (raw.sound === false) S.sound = false;
@@ -71,8 +77,8 @@ function load() {
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, voice: S.voice, sound: S.sound,
-      geoAsked: S.geoAsked, travelSkip: S.travelSkip
+      places: S.places, last: S.last, feedback: S.feedback, learn: S.learn, track: S.track, ownerTech: S.ownerTech, myStars: S.myStars, ownerKey: S.ownerKey, deviceId: S.deviceId, ownerOk: S.ownerOk,
+      voice: S.voice, sound: S.sound, geoAsked: S.geoAsked, travelSkip: S.travelSkip
     }));
   } catch (e) { }
 }
@@ -89,12 +95,92 @@ function pickVoice() {
   } catch (e) { return null; }
 }
 
+/* ===================== Métricas mínimas ===================== */
+function pingStats() {
+  try {
+    if (sessionStorage.getItem('asn.ping')) return;
+    sessionStorage.setItem('asn.ping', '1');
+    const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) ||
+      navigator.standalone === true;
+    const p = S.places[0];
+    const prov = p && p.addr ? String(p.addr).split(',').pop().trim() : null;
+    const ua = navigator.userAgent;
+    const pf = /android/i.test(ua) ? 'android' : /iphone|ipad|ipod/i.test(ua) ? 'ios' : 'desktop';
+    fetch('/api/ping', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ m: standalone ? 's' : 'w', p: prov, v: '4.0', pf })
+    }).catch(() => { });
+  } catch (e) { }
+}
+
 /* ===================== Tormenta en formación ===================== */
 function kmBetween(a, b, c, d) {
   const R = 6371, p = Math.PI / 180;
   const dl = (c - a) * p, dn = (d - b) * p;
   const h = Math.sin(dl / 2) ** 2 + Math.cos(a * p) * Math.cos(c * p) * Math.sin(dn / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function bearingBetween(a, b, c, d) {
+  const p = Math.PI / 180;
+  const y = Math.sin((d - b) * p) * Math.cos(c * p);
+  const x = Math.cos(a * p) * Math.sin(c * p) - Math.sin(a * p) * Math.cos(c * p) * Math.cos((d - b) * p);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function angDiff(a, b) {
+  return Math.abs((b - a + 540) % 360 - 180);
+}
+
+function fmtEta(min) {
+  if (min == null || !isFinite(min)) return '';
+  const m = Math.max(5, Math.round(min / 5) * 5);
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), r = m % 60;
+  return h + ' h' + (r ? ' ' + r + ' min' : '');
+}
+
+/* La ingesta publica cada 10 minutos. Pasados 45, el dato no se usa:
+   una tormenta de hace tres cuartos de hora ya no está donde dice. */
+function nowcastList() {
+  const edad = S.nc && S.nc.generado ? Date.now() - new Date(S.nc.generado).getTime() : 1e12;
+  if (!S.nc || !Array.isArray(S.nc.tormentas) || !isFinite(edad) || edad > 45 * 60 * 1000) return [];
+  return S.nc.tormentas;
+}
+
+/* Qué pasa con la tormenta vista desde un lugar.
+   Solo se usa el vector si la ingesta lo dio por coherente en 3 cuadros.
+   Sin vector: se dice la distancia, nunca una hora inventada. */
+function stormNow(p) {
+  const list = nowcastList();
+  if (!list.length || !p) return null;
+  const cands = [];
+  for (const s of list) {
+    if (!s || !isFinite(s.lat) || !isFinite(s.lon)) continue;
+    const d = kmBetween(p.lat, p.lon, s.lat, s.lon);
+    if (d > 150) continue;
+    const m = s.movimiento || {};
+    const alta = s.confianza === 'alta' && m.kmh > 0 && m.rumbo != null;
+    let off = null, eta = null;
+    if (alta) {
+      off = angDiff(bearingBetween(s.lat, s.lon, p.lat, p.lon), m.rumbo);
+      if (off <= 45 && d > 25) {
+        const proj = d * Math.cos(off * Math.PI / 180);
+        if (proj > 0) eta = Math.round(proj / m.kmh * 60);
+      }
+    }
+    /* "encima" solo si no sabemos que se aleja: una tormenta que ya pasó
+       y va camino a otro lado no se anuncia como si recién se formara. */
+    const encima = d <= 25 && (!alta || off == null || off <= 90);
+    cands.push({ s, d: Math.round(d), eta, off, alta, encima });
+  }
+  if (!cands.length) return null;
+  const enc = cands.filter(c => c.encima).sort((a, b) => a.d - b.d)[0];
+  if (enc) return enc;
+  const viene = cands.filter(c => c.eta != null && c.eta <= 180).sort((a, b) => a.eta - b.eta || a.d - b.d)[0];
+  if (viene) return viene;
+  return cands.sort((a, b) => a.d - b.d)[0];
 }
 
 async function loadNowcast() {
@@ -109,21 +195,22 @@ async function loadNowcast() {
 function paintNowcast() {
   const bar = document.getElementById('ncBar');
   if (!bar) return;
-  const list = (S.nc && S.nc.tormentas) || [];
-  const edad = S.nc && S.nc.generado ? Date.now() - new Date(S.nc.generado).getTime() : 1e12;
-  if (!list.length || edad > 45 * 60 * 1000 || !S.places.length) { bar.hidden = true; return; }
+  if (!S.places.length) { bar.hidden = true; return; }
   let best = null;
   for (const p of S.places) {
-    for (const s of list) {
-      const d = kmBetween(p.lat, p.lon, s.lat, s.lon);
-      if (d <= 90 && (!best || d < best.d)) best = { d: Math.round(d), p, s };
-    }
+    const n = stormNow(p);
+    if (!n) continue;
+    const score = n.encima ? n.d : n.eta != null ? 1000 + n.eta : 5000 + n.d;
+    if (!best || score < best.score) best = { p, n, score };
   }
   if (!best) { bar.hidden = true; return; }
-  const m = best.s.movimiento;
-  const llega = m && Array.isArray(m.llega) ? m.llega[0] : null;
-  bar.innerHTML = '⛈ <span>Tormenta a <b>' + best.d + ' km</b> de ' + esc(best.p.label) +
-    (llega ? ' · llega en ~' + llega.min + ' min' : '') + '</span>';
+  const n = best.n;
+  if (n.encima) {
+    bar.innerHTML = '⛈ <span>Tormenta formándose sobre <b>' + esc(best.p.label) + '</b></span>';
+  } else {
+    bar.innerHTML = '⛈ <span>Tormenta a <b>' + n.d + ' km</b> de ' + esc(best.p.label) +
+      (n.eta != null ? ' · llegaría en ~' + fmtEta(n.eta) : '') + '</span>';
+  }
   bar.hidden = false;
 }
 /* ===================== Sonido de alerta ===================== */
@@ -327,7 +414,8 @@ async function postSubscription(sub) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         subscription: sub.toJSON(),
-        places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon, hydro: !!p.hydro }))
+        places: S.places.map(p => ({ name: p.label, lat: p.lat, lon: p.lon, hydro: !!p.hydro })),
+        owner: !!S.ownerTech
       })
     });
     return !!r.ok;
@@ -427,21 +515,29 @@ function pointRisk(o) {
 function modelRisk(H, m) {
   const g = k => H[k + '_' + m] || [];
   const pr = g('precipitation'), gu = g('wind_gusts_10m'), pp = g('precipitation_probability'), cc = g('cloud_cover');
-  let acc = 0, lvl = 0, rain = false, wind = false;
+  let acc = 0, lvl = 0, rain = false, wind = false, known = 0;
   const hours = [];
   for (let i = 0; i < pr.length; i++) {
-    const r = pr[i] ?? 0;
-    const x = pointRisk({ rain: r, gust: gu[i] ?? 0 });
+    /* nulo no es cero: una hora sin dato no dice "no llueve" */
+    const r = pr[i] == null ? null : pr[i];
+    const gust = gu[i] == null ? null : gu[i];
     if (i < 3) {
-      acc += r;
+      if (r != null) { acc += r; known++; }
+      const x = pointRisk({ rain: r == null ? 0 : r, gust: gust == null ? 0 : gust });
       lvl = Math.max(lvl, x.l);
       rain = rain || x.rain; wind = wind || x.wind;
     }
-    hours.push({ p: r, prob: pp[i] ?? null, gust: gu[i] ?? 0, cl: cc[i] ?? null });
+    hours.push({ p: r, prob: pp[i] == null ? null : pp[i], gust, cl: cc[i] == null ? null : cc[i] });
   }
-  lvl = Math.max(lvl, acc >= 100 ? 4 : acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
-  const rate = Math.max(0, ...hours.slice(0, 3).map(h => h.p || 0));
-  return { m, l: lvl, rain, wind, acc, rate, hours };
+  /* la ventana de 3 h vale sólo si hay al menos una hora con dato */
+  const has = known > 0;
+  if (has) {
+    lvl = Math.max(lvl, acc >= 100 ? 4 : acc >= 60 ? 3 : acc >= 30 ? 2 : acc >= 15 ? 1 : 0);
+  } else {
+    lvl = 0; rain = false; wind = false; acc = null;
+  }
+  const rate = Math.max(0, ...hours.slice(0, 3).map(h => (h.p == null ? 0 : h.p)));
+  return { m, l: lvl, rain, wind, acc, rate, hours, has, known };
 }
 
 function ensembleRisk(H) {
@@ -476,8 +572,11 @@ function ensembleLevel(e) {
 
 function aggregate(H, ens) {
   const models = MODELS.map(m => modelRisk(H, m));
-  const sorted = models.map(x => x.l).sort((a, b) => b - a);
-  const detLevel = Math.min(4, Math.max(0, sorted[1] ?? sorted[0] ?? 0));
+  const usable = models.filter(x => x.has); /* sólo los modelos que realmente trajeron horas */
+  /* sin modelos con datos y sin ensemble no hay pronóstico: "sin dato", no nivel 0 */
+  const sinDato = usable.length === 0 && !(ens && ens.n > 0);
+  const sorted = usable.map(x => x.l).sort((a, b) => b - a);
+  const detLevel = Math.min(4, Math.max(0, sorted[0] ?? 0)); /* el peor modelo manda: nunca el segundo */
   const votes = { rain: models.filter(x => x.rain).length, wind: models.filter(x => x.wind).length };
   const rainRate = Math.max(0, ...models.map(m => m.rate));
 
@@ -489,27 +588,41 @@ function aggregate(H, ens) {
 
   const eLevel = ens ? ensembleLevel(ens) : null;
   let level = eLevel == null ? detLevel : eLevel;
-  if (eLevel != null && Math.abs(detLevel - eLevel) > 1) level = Math.min(detLevel, eLevel) + 1;
+  /* sin modelos utilizables no se promedia contra un detLevel inventado */
+  if (eLevel != null && usable.length && Math.abs(detLevel - eLevel) > 1) level = Math.min(detLevel, eLevel) + 1;
+  if (sinDato) level = 0;
 
-  const storm = capeMax >= 1000 && (!ens || ens.rain10 >= 0.30);
-  if (storm) level = Math.max(level, 1);
+  /* CAPE mide inestabilidad, no lluvia. Antes, con el ensemble caído (429),
+     "no hay ensemble" se tomaba como "no hay contraprueba" y un CAPE de
+     1.000 bastaba para declarar alerta amarilla con el cielo despejado.
+     Ahora la inestabilidad sola no alcanza: hace falta que alguien
+     pronostique lluvia. */
+  const rainModels = usable.filter(m => m.rain).length;
+  const ensOk = !!(ens && ens.n > 0);
+  const rainSeen = rainModels >= 2 || (ensOk && ens.rain10 >= 0.30);
+  const storm = capeMax >= 1000 && rainSeen;
+  if (storm && !sinDato) level = Math.max(level, 1);
 
-  const hailPossible = capeMax >= 1500 && gustMax >= 70 && freezing >= 3000 && freezing <= 4500;
+  const hailPossible = capeMax >= 1500 && gustMax >= 70 && freezing >= 3000 &&
+    freezing <= 4500 && rainSeen;
 
   const snowSeries = seriesByBase(H, 'snowfall');
   const snowHours = [];
   for (let i = 0; i < 13; i++) {
-    snowHours.push(snowSeries.reduce((m, s) => Math.max(m, s[i] ?? 0), 0));
+    snowHours.push(snowSeries.reduce((m, s) => Math.max(m, s[i] == null ? 0 : s[i]), 0));
   }
   const snow3 = snowHours.slice(0, 3).reduce((a, b) => a + b, 0);
-  if (snow3 >= 15) level = 4;
-  else if (snow3 >= 5) level = Math.max(3, level);
-  else if (snow3 >= 2) level = Math.max(2, level);
-  else if (snow3 >= 0.2) level = Math.max(1, level);
+  if (!sinDato) {
+    if (snow3 >= 15) level = 4;
+    else if (snow3 >= 5) level = Math.max(3, level);
+    else if (snow3 >= 2) level = Math.max(2, level);
+    else if (snow3 >= 0.2) level = Math.max(1, level);
+  }
 
   return {
-    models, level: Math.min(4, level), detLevel, eLevel, votes, rainRate,
-    capeMax, gustMax, freezing, storm, hailPossible, ens, snow3, snowHours
+    models, level: Math.min(4, level), detLevel, eLevel, votes, rainRate, sinDato,
+    capeMax, gustMax, freezing, storm, hailPossible, ens, snow3, snowHours,
+    ensOk, rainSeen, rainModels
   };
 }
 
@@ -565,6 +678,15 @@ function levelInfo(d) {
     };
   }
 
+  /* sin modelos no se puede afirmar calma: la tarjeta dice "sin dato", no nivel 0 */
+  if (d.sinDato) {
+    return {
+      cls: 'nodata', emoji: '🛰️', title: 'Sin dato',
+      line: 'No llegaron datos de los modelos para tu zona.',
+      action: 'Probá actualizar en unos minutos.', cta: '❔', pill: '⚪ Sin dato'
+    };
+  }
+
   const ph = phenomenon(d);
   const L = LEVELS[d.level];
   if (d.level === 0) {
@@ -589,8 +711,8 @@ function levelInfo(d) {
   const actions = {
     1: 'Atención, pero no es grave. Seguí el pronóstico.',
     2: 'Guardá lo que tengas afuera y cerrá las ventanas.',
-    3: 'Quedate adentro. Evitá salir en auto si no hace falta.',
-    4: 'No salgas. Es una alerta excepcional.'
+    3: 'Riesgo alto. Evitá salir en auto si no hace falta y seguí las indicaciones de las autoridades.',
+    4: 'Riesgo extremo. Seguí las indicaciones de las autoridades.'
   };
   return {
     cls: 'lv' + d.level, emoji: ph.emoji, title: titles[d.level],
@@ -680,6 +802,46 @@ async function fetchHydro(p) {
   }
 }
 
+async function fetchBrasil(p) {
+  /* Solo para lugares de la cuenca del Paraná: el dato es de Brasil. */
+  if (!(p.lat < -26.5 && p.lon > -59)) return null;
+  try {
+    const r = await fetch('/api/brasil', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j && j.ok ? j : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* Dictamen: cada fuente vota y el motor solo concluye si coinciden. */
+async function fetchDictamen(p) {
+  try {
+    const r = await fetch('/api/dictamen?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || j.error) return null;
+    return j;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* Lluvia medida sobre la cuenca. No predice altura de crecida: informa
+   cuánta agua cayó y cuántos pluviómetros la sostienen. */
+async function fetchCuenca(p) {
+  try {
+    const r = await fetch('/api/cuenca?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || j.error) return null;
+    return j;
+  } catch (e) {
+    return null;
+  }
+}
+
 /* Amanecer y atardecer (pedido aparte, sin modelos) */
 async function fetchSun(p) {
   const r = await fetch('/api/sun?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
@@ -719,12 +881,49 @@ async function fetchMetno(p) {
   return { level, rain3: +rain3.toFixed(1), gustKmh, windKmh: Math.round(windMs * 3.6) };
 }
 
+/* Una sola consulta por zona y por actualización, guardada 30 minutos.
+   Antes se pedía un ensemble por cada lugar en cada refresco: eso era lo
+   que hacía que la fuente contestara 429 y la app quedara sin pronóstico. */
+const ENS_TTL = 30 * 60 * 1000;
+const ENS_USE = 3 * 60 * 60 * 1000;   /* un ensemble de 3 h sigue sirviendo */
+const ENS_CACHE = new Map();
+const ENS_WAIT = new Map();
+
+function ensKey(p) {
+  /* 0,1° ≈ 11 km: más fino que la grilla de 0,25° del modelo, así que
+     redondear no cambia el dato y sí evita una consulta por lugar */
+  return (Math.round(Number(p.lat) * 10) / 10).toFixed(1) + ',' +
+    (Math.round(Number(p.lon) * 10) / 10).toFixed(1);
+}
+
 async function fetchEnsemble(p) {
-  const r = await fetch('/api/ens?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const j = await r.json();
-  if (!j.hourly) throw new Error('sin ensemble');
-  return j.hourly;
+  const k = ensKey(p);
+  const c = ENS_CACHE.get(k);
+  const now = Date.now();
+  if (c && c.hourly && now - c.hourlyAt < ENS_USE) {
+    if (now - c.at < ENS_TTL) return c.hourly;      /* fresco */
+    if (c.err && now - c.at < 5 * 60 * 1000) return c.hourly;  /* la fuente falló recién */
+  }
+  if (!c || !c.hourly) {
+    if (c && c.err && now - c.at < 5 * 60 * 1000) throw c.err;
+  }
+  if (ENS_WAIT.has(k)) return ENS_WAIT.get(k);
+
+  const job = (async () => {
+    const r = await fetch('/api/ens?lat=' + p.lat + '&lon=' + p.lon, { cache: 'no-store' });
+    if (!r.ok) {
+      const err = new Error('HTTP ' + r.status);
+      ENS_CACHE.set(k, { at: Date.now(), hourly: c && c.hourly, hourlyAt: c && c.hourlyAt, err });
+      throw err;
+    }
+    const j = await r.json();
+    if (!j.hourly) throw new Error('sin ensemble');
+    ENS_CACHE.set(k, { at: Date.now(), hourly: j.hourly, hourlyAt: Date.now(), err: null });
+    return j.hourly;
+  })();
+
+  ENS_WAIT.set(k, job);
+  try { return await job; } finally { ENS_WAIT.delete(k); }
 }
 
 /* ===================== Red: direcciones ===================== */
@@ -823,9 +1022,10 @@ async function refresh() {
   S.busy = true;
   paint();
   loadNowcast();
+  pingStats();
   const results = await Promise.allSettled(S.places.map(async p => {
-    const [det, ens, met, sun, hyd] = await Promise.allSettled([
-      fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p), fetchHydro(p)
+    const [det, ens, met, sun, hyd, cue, bra, dic] = await Promise.allSettled([
+      fetchPlace(p), fetchEnsemble(p), fetchMetno(p), fetchSun(p), fetchHydro(p), fetchCuenca(p), fetchBrasil(p), fetchDictamen(p)
     ]);
     return {
       det: det.status === 'fulfilled' ? det.value : null,
@@ -833,6 +1033,9 @@ async function refresh() {
       met: met.status === 'fulfilled' ? met.value : null,
       sun: sun.status === 'fulfilled' ? sun.value : null,
       hyd: hyd.status === 'fulfilled' ? hyd.value : null,
+      cue: cue.status === 'fulfilled' ? cue.value : null,
+      brasil: bra.status === 'fulfilled' ? bra.value : null,
+      dic: dic.status === 'fulfilled' ? dic.value : null,
       err: det.status !== 'fulfilled' ? det.reason : null
     };
   }));
@@ -846,21 +1049,29 @@ async function refresh() {
       const agg = aggregate(r.det.hourly, r.ens);
       agg.times = r.det.hourly.time;
       agg.current = r.det.current;
+      /* d.wx se leía en media app pero nunca se asignaba: por eso no había
+         temperatura y el control de "está lloviendo ahora" no se ejecutaba. */
+      agg.wx = { hourly: r.det.hourly, current: r.det.current, daily: r.det.daily || null };
       agg.sunrise = (r.sun && r.sun.sunrise) || (r.det.daily && r.det.daily.sunrise) || null;
       agg.sunset = (r.sun && r.sun.sunset) || (r.det.daily && r.det.daily.sunset) || null;
       agg.met = r.met;
       /* si el río no se pudo leer, se dice: nunca se muestra "tranquilo" sin dato */
       agg.hydroErr = !!(r.hyd && r.hyd.error);
       agg.hydro = r.hyd && !r.hyd.error ? r.hyd : null;
+      agg.cuenca = r.cue && r.cue.ok ? r.cue : null;
+      agg.dict = r.dic && r.dic.ok ? r.dic : null;
+      agg.brasil = r.brasil && r.brasil.ok ? r.brasil : null;
       applyLearning(p, agg);
       S.data[p.id] = agg;
       ok++;
+      trackAlert(p, agg);
       checkAlert(p, agg);
     } else if (r && r.met) {
       /* Open-Meteo caído: seguimos con MET Norway como respaldo */
       const agg = aggFromMet(r.met);
       S.data[p.id] = agg;
       ok++;
+      trackAlert(p, agg);
       checkAlert(p, agg);
     } else {
       S.data[p.id] = Object.assign(S.data[p.id] || {}, { error: true });
@@ -904,6 +1115,24 @@ function checkAlert(p, agg) {
   const changed = agg.level !== prevLevel || ph.word !== prevPh;
   const repeatDue = agg.level >= 1 && now - prevAt >= 30 * 60 * 1000;
 
+  /* Si había alerta y los datos dicen que ya no, el aviso TIENE que bajar.
+     Una alerta que no puede bajar es peor que no tener alerta. Con el río
+     todavía en alerta no se anuncia calma: la crecida manda. */
+  const riverOn = !!(agg.hydro && agg.hydro.level >= 1);
+  if (prevLevel >= 1 && agg.level === 0 && !riverOn) {
+    if (agg.sinDato) {
+      notify('⚪ Sin dato · retiramos el aviso en ' + p.label,
+        'No llegan datos para tu zona. Retiramos el aviso anterior, pero no podemos confirmar calma.');
+      speak('Retiramos el aviso en ' + p.label + '. No llegan datos, así que no podemos confirmar calma.');
+    } else {
+      const info = levelInfo(agg);
+      notify('🟢 Sin alerta · ' + info.title + ' en ' + p.label, info.line);
+      speak('Bajó la alerta en ' + p.label + '. ' + info.line);
+    }
+    S.last[p.id] = { level: 0, at: 0, ph: '' };
+    return;
+  }
+
   /* avisa en cada cambio de nivel o fenómeno, y repite cada 30 min si sigue */
   if (agg.level >= 1 && (changed || repeatDue)) {
     const L = LEVELS[agg.level];
@@ -931,8 +1160,10 @@ function notify(title, body) {
   try {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     if (!('serviceWorker' in navigator)) return;
+    /* ícono grande en color (el logo) y chico monocromo: Android pinta el
+       chico de blanco sí o sí, así que ahí va la silueta sin color */
     navigator.serviceWorker.ready.then(reg => reg.showNotification(title, {
-      body, icon: 'icon-192.png', badge: 'icon-192.png',
+      body, icon: 'icon-192.png', badge: 'notif-96.png',
       vibrate: [300, 100, 300], requireInteraction: true, tag: 'asn'
     })).catch(() => { });
   } catch (e) { }
@@ -984,6 +1215,7 @@ function levelOf(p) {
 function paint() {
   const sub = document.getElementById('sub');
   const view = document.getElementById('view');
+  checkHealth();
   const gear = document.getElementById('gear');
   if (gear) gear.textContent = S.view === 'settings' ? '✕' : '⚙️';
 
@@ -1000,6 +1232,8 @@ function paint() {
   /* el río sin dato no es "todo tranquilo": no se puede afirmar calma */
   const hydroUnknown = hydroWorst === 0 &&
     S.places.some(p => S.data[p.id] && S.data[p.id].hydroErr);
+  /* lo mismo con el clima: sin modelos utilizables no se anuncia "todo tranquilo" */
+  const weatherUnknown = S.places.some(p => S.data[p.id] && S.data[p.id].sinDato);
 
   let msg = worst >= 4 ? (alerts > 1 ? alerts + ' lugares en alerta morada' : 'Alerta morada en un lugar')
     : worst === 3 ? (alerts > 1 ? alerts + ' lugares en alerta roja' : 'Alerta roja en un lugar')
@@ -1015,9 +1249,14 @@ function paint() {
           : 'Río alto';
   } else if (hydroUnknown) {
     msg = 'Sin dato del río';
+  } else if (weatherUnknown && worst === 0) {
+    msg = 'Sin dato del clima';
   }
   /* el nombre va siempre: es la marca, y el estado se suma detrás */
-  sub.textContent = 'Alerta Super Niño · ' + msg + (S.busy ? ' · actualizando' : '');
+  /* El estado global ya lo cuenta la franja roja de arriba. Repetirlo acá
+     contradecía a la tarjeta que estabas mirando ("Crecida grave" arriba,
+     "Todo tranquilo" en el lugar). El encabezado queda como marca. */
+  sub.textContent = 'Alerta Super Niño 4.0 · ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + (S.busy ? ' · actualizando' : '');
 
   if (S.view === 'settings') view.innerHTML = viewSettings();
   else if (S.view === 'add') { /* la vista se arma aparte */ }
@@ -1116,6 +1355,146 @@ function notifyBanner() {
   </div>`;
 }
 
+const f1 = v => (v == null ? '—' : String(v).replace('.', ','));
+
+/* Detalle desplegable: volumen, caudal y tiempos. Todo con su origen. */
+function detalleHtml(d) {
+  const cu = d.cuenca;
+  if (!cu || !cu.red) return '';
+  /* Sin lluvia igual se muestra qué se está vigilando: si la persona no ve
+     que hay algo midiendo, la app parece que no hace nada. */
+  if ((cu.lluvia?.mm24h ?? 0) < 5) {
+    if ((cu.red.pluviometros || 0) < 3) return '';
+    const nom = (cu.cuenca && cu.cuenca.nombre) ? cu.cuenca.nombre : 'tu zona';
+    return '<div style="margin:10px 0 2px;font-size:12.5px;color:#8fa3c0">' +
+      'Vigilando la cuenca ' + nom + ' · sin lluvia · ' +
+      cu.red.informando + ' de ' + cu.red.pluviometros + ' medidores.</div>';
+  }
+  if (!cu.detalle || !cu.altura) return '';
+  const t = cu.detalle, a = cu.altura;
+  const miles = n => Number(n).toLocaleString('es-AR');
+  return '<details style="margin:10px 0 2px;font-size:12.5px;line-height:1.6;color:#9db0c9">' +
+    '<summary style="cursor:pointer;color:#c9d6e6">Ver detalle</summary>' +
+    '<div style="margin-top:7px">' +
+    'Suba esperada: <b>' + f1(a.bajo_m) + ' a ' + f1(a.alto_m) + ' m</b> sobre el nivel normal, que es ' + f1(a.normal_m) + ' m.<br>' +
+    'Volumen: ' + f1(t.volumen_hm3[0]) + ' a ' + f1(t.volumen_hm3[1]) + ' hm³.<br>' +
+    'Caudal medio: ' + miles(t.caudal_ls[0]) + ' a ' + miles(t.caudal_ls[1]) + ' litros por segundo.<br>' +
+    'En recorrer la cuenca: ' + t.tiempo_cuenca_h[0] + ' a ' + t.tiempo_cuenca_h[1] + ' horas. Aguas abajo: ' + t.tiempo_abajo_h[0] + ' a ' + t.tiempo_abajo_h[1] + ' horas.<br>' +
+    '<span style="opacity:.72">' + a.dias_registro + ' días de registro medido. ' + a.nota + '</span>' +
+    '</div></details>';
+}
+
+function brasilHtml(d) {
+  const b = d.brasil;
+  if (!b || b.mm30 == null) return '';
+  /* Sin milímetros ni días: lo que la persona necesita saber es si va a
+     llegar más agua o si esto es lo que ya venía. */
+  let txt;
+  if (b.mm30 < 40) {
+    txt = 'En Brasil, donde nace el agua de este río, casi no llovió este mes. ' +
+      'No se está sumando agua nueva: lo que ves es la que ya venía bajando.';
+  } else if (b.mm30 < 110) {
+    txt = 'En Brasil llovió poco este mes. No se espera que llegue más agua ' +
+      'que la que ya está en camino.';
+  } else {
+    txt = 'En Brasil llovió mucho este mes. En los próximos días puede llegar ' +
+      'más agua a esta zona.';
+  }
+  return '<div style="margin:10px 0 2px;font-size:12.5px;line-height:1.5;color:#c2cee0">' + txt + '</div>';
+}
+
+function votosHtml(d) {
+  const g = d.dict;
+  if (!g || !g.votos || !g.votos.length) return '';
+  const rows = g.votos.map(v => {
+    const dot = v.voto == null ? '#5b6b85' : v.voto >= 2 ? '#c9564a' : v.voto === 1 ? '#d9a441' : '#3f8f63';
+    return '<div style="display:flex;gap:8px;margin:3px 0">' +
+      '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex:0 0 7px;margin-top:5px"></span>' +
+      '<span style="flex:1">' + esc(v.fuente || '') + (v.detalle ? ' <span style="opacity:.6">· ' + esc(v.detalle) + '</span>' : '') + '</span>' +
+      '</div>';
+  }).join('');
+  return '<details style="margin:6px 0 2px;font-size:12px;color:#9db0c9">' +
+    '<summary style="cursor:pointer;color:#c9d6e6">Cómo se llegó a esto · ' + g.fuentes_validas + ' de ' + g.fuentes_totales + ' fuentes</summary>' +
+    '<div style="margin-top:6px">' + rows +
+    '<div style="opacity:.7;margin-top:6px">' + esc(g.nota || '') + '</div></div></details>';
+}
+
+/* ===================== Seguimiento del episodio =====================
+   De dónde sale cada aviso (qué modelo marca, cuál no, cuál no tiene dato)
+   se calcula y se usa del lado nuestro: no se muestra. A la persona le
+   sirve saber si el aviso sigue, si va a más o si ya terminó.
+   Cada refresco compara el nivel con el anterior y guarda el recorrido:
+   es el registro de nuestras propias lecturas, sin inventar nada. */
+function trackAlert(p, agg) {
+  if (!agg) return;
+  const lvl = Math.max(agg.level || 0, (agg.hydro && agg.hydro.level) || 0);
+  const ph = agg.hydro && agg.hydro.level >= 1 ? 'crecida' : phenomenon(agg).word;
+  const prev = S.track[p.id];
+
+  if (lvl >= 1) {
+    if (!prev || prev.level === 0) {
+      S.track[p.id] = { since: Date.now(), level: lvl, peak: lvl, ph, checks: 1, at: Date.now(), hist: [lvl] };
+    } else {
+      prev.level = lvl;
+      prev.peak = Math.max(prev.peak || lvl, lvl);
+      prev.checks = (prev.checks || 0) + 1;
+      prev.at = Date.now();
+      prev.ph = ph;
+      prev.hist = (prev.hist || []).concat([lvl]).slice(-24);
+      delete prev.ended;
+    }
+  } else if (prev && prev.level >= 1) {
+    S.track[p.id] = {
+      since: prev.since, level: 0, peak: prev.peak, ph: prev.ph,
+      checks: (prev.checks || 0) + 1, at: Date.now(), ended: Date.now(),
+      hist: (prev.hist || []).concat([0]).slice(-24), askedAt: prev.askedAt
+    };
+  } else if (prev && prev.ended && Date.now() - prev.ended > 6 * 3600 * 1000) {
+    delete S.track[p.id];
+  }
+}
+
+function hmText(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+
+function durText(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), r = m % 60;
+  return h + ' h' + (r ? ' ' + r + ' min' : '');
+}
+
+function trackHtml(p) {
+  const t = S.track && S.track[p.id];
+  if (!t) return '';
+  let txt = '';
+  if (t.level >= 1) {
+    const desde = 'desde las ' + hmText(t.since) + ' (' + durText(Date.now() - t.since) + ')';
+    const h = t.hist || [];
+    if (t.peak > (h[0] == null ? t.level : h[0])) txt = 'El aviso va a más ' + desde + '.';
+    else if (h.length > 1 && h[h.length - 1] < h[0]) txt = 'El aviso está bajando ' + desde + '.';
+    else txt = 'El aviso sigue ' + desde + '.';
+  } else if (t.ended && Date.now() - t.ended < 6 * 3600 * 1000) {
+    txt = 'El aviso terminó a las ' + hmText(t.ended) +
+      ', después de ' + durText((t.ended || 0) - (t.since || 0)) + '.';
+  }
+  if (!txt) return '';
+
+  /* lo último que reportó la persona, si fue en este mismo episodio */
+  const fb = (S.feedback || []).slice(-6).reverse()
+    .find(f => f.id === p.id && f.t && Date.now() - f.t < 90 * 60 * 1000);
+  const note = fb
+    ? `<div style="font-size:12px;color:#8fa3c0;margin-top:4px">Tu reporte de las ${hmText(fb.t)}: ` +
+      (fb.a === 'no' ? 'no estaba pasando' : fb.a === 'rain' ? 'llovía' : 'había ' +
+        (fb.a === 'hail' ? 'granizo' : 'viento fuerte')) + '.</div>'
+    : '';
+
+  return `<div style="margin:8px 0 2px;font-size:12.5px;color:#9db0c9;line-height:1.5">${txt}${note}</div>`;
+}
+
 function heroHtml(p) {
   const d = S.data[p.id];
   if (!d || d.error) {
@@ -1125,8 +1504,83 @@ function heroHtml(p) {
       <div class="line">${d && d.error ? 'No pudimos traer el pronóstico.' : 'Estamos mirando el cielo.'}</div></div></div>
     </section>`;
   }
-  const info = levelInfo(d);
   const hyLvl = (d.hydro && d.hydro.level) || 0;
+  const info = levelInfo(d);
+  /* con río cerca y sin medición no se puede decir "todo" tranquilo */
+  if (!hyLvl && !d.sinDato && d.hydro && !d.hydro.now) info.title = 'Clima tranquilo';
+
+  /* si está lloviendo ahora, la tarjeta lo dice: no se muestra calma mientras cae agua */
+  if (!hyLvl && d.wx && d.wx.current) {
+    const pr = Number(d.wx.current.precipitation || 0);
+    const gf = Number(d.wx.current.wind_gusts_10m || 0);
+    const wc = Number(d.wx.current.weather_code || 0);
+    const llueve = pr >= 0.2 || (wc >= 51 && wc <= 67) || (wc >= 80 && wc <= 82) || wc >= 95;
+    if (llueve) {
+      info.title = pr >= 4 || wc === 65 || wc === 82 ? 'Lluvia fuerte'
+        : wc >= 95 ? 'Tormenta ahora'
+          : pr >= 0.2 || (wc >= 61 && wc <= 64) || wc === 81 ? 'Está lloviendo' : 'Llovizna';
+      info.emoji = '🌧️';
+      info.line = pr >= 0.2
+        ? 'Ahora mismo en tu zona caen ' + pr.toFixed(1) + ' mm/h.'
+        : 'Está lloviendo en tu zona ahora mismo.';
+      info.action = 'Si tenés que salir, llevá paraguas y evitá calles anegadas.';
+    } else if (gf >= 45) {
+      info.title = 'Viento fuerte';
+      info.emoji = '💨';
+      info.line = 'Ráfagas de ' + Math.round(gf) + ' km/h ahora mismo.';
+      info.action = 'Asegurá lo que pueda volar en balcones y patios.';
+    }
+  }
+
+  /* Dictamen del motor: si las fuentes coinciden, manda sobre el pronóstico
+     de la ciudad. Nunca sobre una alerta de río ya declarada. */
+  if (!hyLvl && d.dict && (d.dict.estado === 'agua_en_camino' || d.dict.estado === 'atencion' || d.dict.estado === 'dividido')) {
+    info.title = d.dict.titulo;
+    info.emoji = d.dict.estado === 'agua_en_camino' ? '🌊' : d.dict.estado === 'dividido' ? '❔' : '⚠️';
+    info.line = d.dict.texto;
+    info.action = d.dict.estado === 'agua_en_camino'
+      ? 'No cruces por donde el agua atraviesa la calle.'
+      : 'Mirá el detalle antes de salir.';
+  }
+
+  /* Lluvia medida sobre la cuenca. Es medición, no pronóstico: pesa más que
+     el pronóstico de la ciudad. Si la red no alcanza, se dice. */
+  if (!hyLvl && d.cuenca) {
+    const cu = d.cuenca;
+    const red = cu.red || {};
+    if (cu.altura && (cu.lluvia?.mm24h ?? 0) >= 5) {
+      const a = cu.altura;
+      info.title = 'Suba esperada del arroyo';
+      info.emoji = '🌊';
+      info.line = 'Entre ' + f1(a.bajo_m) + ' y ' + f1(a.alto_m) + ' m por encima de lo normal, que es ' +
+        f1(a.normal_m) + ' m.';
+      info.action = 'No cruces por donde el agua atraviesa la calle.';
+    } else if (cu.estado === 'lluvia' && cu.lluvia && cu.cuenca) {
+      info.title = 'Lluvia sobre la cuenca';
+      info.emoji = '🌧️';
+      info.line = 'Cayeron ' + (cu.lluvia.mm3h ?? 0) + ' mm en 3 h sobre ' + cu.cuenca.nombre +
+        '. ' + red.informando + ' de ' + red.pluviometros + ' pluviómetros informando.';
+      info.action = 'El agua ya cayó en la cuenca. No estimamos a qué altura llegará el río.';
+    } else if (cu.estado === 'sin_dato' && info.emoji !== '🌧️' && (red.pluviometros || 0) >= 3) {
+      info.line = 'De la cuenca tenemos poco dato: informan ' + red.informando +
+        ' de ' + red.pluviometros + ' pluviómetros.';
+    }
+  }
+
+  /* la línea de la tarjeta puede anunciar lluvia por la franja horaria:
+     el título tiene que decir lo mismo, no "tranquilo" */
+  if (!hyLvl && info.emoji !== '🌧️') {
+    const ev = nextEvent(d);
+    if (ev && /^Lluvia/.test(ev.label)) {
+      const mins = Math.round((new Date(ev.iso).getTime() - Date.now()) / 60000);
+      info.title = mins <= 15 ? 'Lluvia ahora' : 'Lluvia en camino';
+      info.emoji = '🌧️';
+      info.line = mins <= 15
+        ? 'Está empezando a llover en tu zona.'
+        : 'Se espera lluvia en unos ' + mins + ' minutos.';
+      info.action = 'Si tenés que salir, llevá paraguas y evitá calles anegadas.';
+    }
+  }
   const effLvl = Math.max(d.level, hyLvl);   // la crecida también es una alerta
   const pill = info.pill;
   const ev = eventText(d);
@@ -1140,6 +1594,12 @@ function heroHtml(p) {
     (c.precipitation || 0) > 0 ? 'está lloviendo' : ''
   ].filter(Boolean).join(' · ');
 
+  /* El GIF se abre con alerta, o con una tormenta a 2 h o menos.
+     Si el nivel está en 0 por falta de dato, el ETA no alcanza: primero el dato. */
+  const ncNow = stormNow(p);
+  const etaGif = ncNow && ncNow.eta != null && ncNow.eta <= 120 && !d.sinDato;
+  const gifOk = hyLvl === 0 && (d.level >= 1 || etaGif);
+
   const ask = S.askFor === p.id ? askHtml(p) : '';
   const askBtn = d.level >= 1
     ? `<button class="ghost" data-ask="${p.id}" style="padding:7px 10px;font-size:12px">¿Está pasando?</button>`
@@ -1152,12 +1612,13 @@ function heroHtml(p) {
       </button>
       <span style="display:flex;align-items:center;gap:7px">
         <span class="chip3h${hyLvl >= 1 ? ' hydro' : ''}">${esc(pill)}</span>
-        ${effLvl >= 2 && !hyLvl ? `<button class="iconbtn" data-gif="${p.id}" aria-label="Radar animado" title="Radar animado">🎞️</button>` : ''}
         ${effLvl >= 1 ? `<button class="iconbtn" data-share="${p.id}" aria-label="Compartir alerta" title="Compartir alerta">🔗</button>` : ''}
       </span>
     </div>
     ${p.addr ? `<div class="addr">${esc(p.addr)}</div>` : ''}
-    ${!hyLvl && d.hydroErr ? `<div class="hywarn">⚠ No pudimos leer el nivel del río. El clima está tranquilo; del río no tenemos dato ahora.</div>` : ''}
+    ${!hyLvl && d.hydroErr ? `<div class="hywarn">⚠ No pudimos leer el nivel del río. ${d.sinDato ? '' : 'El clima está tranquilo; '}del río no tenemos dato ahora.</div>` : ''}
+    ${!hyLvl && d.hydro && !d.hydro.now && !d.hydroErr ? `<div class="addr" style="color:#8fa3c0">${esc(d.hydro.river || 'Río cerca')} · sin medición automática</div>` : ''}
+    ${!hyLvl && !d.hydroErr && !d.hydro ? `<div class="addr" style="color:#8fa3c0">Sin río ni arroyo cerca: esto es solo clima.</div>` : ''}
 
     <div class="main">
       <div class="emoji">${info.emoji}</div>
@@ -1168,7 +1629,19 @@ function heroHtml(p) {
       </div>
     </div>
 
+    ${trackHtml(p)}
+
+    ${detalleHtml(d)}
+    ${brasilHtml(d)}
+    ${votosHtml(d)}
+
     <div class="action"><span class="cta">${info.cta}</span><span>${info.action}</span></div>
+
+    ${gifOk ? `<div class="links" style="margin:8px 0 0">
+      <button class="ghost" data-gif="${p.id}" style="padding:7px 12px;font-size:12px">Ver radar animado</button>
+    </div>` : ''}
+
+    ${hyLvl >= 4 ? '' : tempHtml(d)}
 
     ${hyLvl >= 1 ? riverHtml(d.hydro) : ''}
 
@@ -1180,10 +1653,7 @@ function heroHtml(p) {
 
     ${hyLvl >= 3 ? '' : tilesHtml(d)}
 
-    ${hyLvl >= 3 ? '' : `<div class="now">
-      <span>Ahora <b>${nowBits || '—'}</b></span>
-      <span style="font-size:11.5px;color:#7d90b3">${d.ens ? d.ens.n + ' escenarios' : ''}</span>
-    </div>`}
+    ${hyLvl >= 3 ? '' : `<div class="now"></div>`}
 
 
     <details class="more">
@@ -1336,16 +1806,32 @@ function riverHtml(h) {
   const mon = String(h.date || '').slice(5, 7);
   const when = day ? `Medido el ${day}/${mon}` : '';
 
-  return `<div class="river ${tr.key || 'estable'}">
-    <div class="rtop">
-      <span class="rnow">${f1(h.now)} m</span>
-      <span class="rtrend ${tcls}">${ttxt}</span>
-    </div>
+  /* termómetro vertical: el nivel actual se ve contra los umbrales.
+     Si la estación no tiene alerta o evacuación, ese tramo no se dibuja. */
+  /* Sin barras ni escalas: una frase que se entiende sin saber leer un gráfico. */
+  const dist = v => (v == null ? null : Math.round(Math.abs(h.now - v) * 100) / 100);
+  let frase, fcolor;
+  if (g.ev != null && h.now >= g.ev) {
+    frase = 'Está ' + f1(dist(g.ev)) + ' m por encima del nivel de evacuación.';
+    fcolor = '#e0796d';
+  } else if (g.al != null && h.now >= g.al) {
+    frase = 'Está ' + f1(dist(g.al)) + ' m por encima del nivel de alerta.';
+    if (g.ev != null) frase += ' Faltan ' + f1(dist(g.ev)) + ' m para evacuación.';
+    fcolor = '#e0b562';
+  } else if (g.al != null) {
+    frase = 'Está ' + f1(dist(g.al)) + ' m por debajo del nivel de alerta.';
+    fcolor = '#8fd0a8';
+  } else {
+    frase = 'Esta estación no tiene umbral de alerta publicado.';
+    fcolor = '#8ea2c0';
+  }
 
-    <div class="rgauge" role="img" aria-label="El agua está en ${f1(g.now)} metros">
-      ${zones}${marks.join('')}
-    </div>
-    <div class="rleg">${leg.join('')}</div>
+
+
+  return `<div class="river ${tr.key || 'estable'}">
+    <div class="rnow" style="font-size:46px;line-height:1;font-weight:300;color:#eaf1fb;letter-spacing:-1px">${f1(h.now)} <span style="font-size:18px">m</span></div>
+    <div class="rtrend ${tcls}" style="margin-top:8px;display:inline-block">${ttxt}</div>
+    <div style="margin-top:10px;font-size:13px;line-height:1.45;color:${fcolor}">${frase}</div>
 
     ${riverSpark(h)}
     <div class="rfoot">
@@ -1445,6 +1931,28 @@ function openMenu() {
   updateGeoBtn();
 }
 
+/* El encabezado queda fuera del contenedor que escucha los clics, asi que
+   el boton nunca recibia el evento. Listener directo. */
+document.addEventListener('click', e => {
+  const b = e.target && e.target.closest ? e.target.closest('#menu') : null;
+  if (b) { openMenu(); }
+}, true);
+
+/* Las filas de la hoja no reciben el clic por el ruteo general; se
+   despachan aca, en captura, con la misma logica del router. */
+document.addEventListener('click', ev => {
+  const hoja = ev.target && ev.target.closest ? ev.target.closest('#menuSheet') : null;
+  if (!hoja) return;
+  if (ev.target.closest('[data-close],#menuClose,.sheet-close,.x')) { closeMenu(); return; }
+  const fila = ev.target.closest('[data-k]');
+  if (!fila) return;
+  const k = fila.getAttribute('data-k');
+  if (k === 'support') { location.href = '/apoyar.html#donar'; return; }
+  if (k === 'tutorial') { closeMenu(); openSheet(); return; }
+  if (k === 'settings') { closeMenu(); S.view = 'settings'; paint(); return; }
+  if (k === 'share') { closeMenu(); if (typeof shareApp === 'function') shareApp(); return; }
+}, true);
+
 function closeMenu() {
   const el = document.getElementById('menuSheet');
   if (el) el.hidden = true;
@@ -1517,6 +2025,61 @@ function hydroAskBanner() {
     <button data-hydro="yes" data-place="${p.id}">Sí</button>
     <button class="x2" data-hydro="no" data-place="${p.id}" aria-label="No">✕</button>
   </div>`;
+}
+
+const WX_EMOJI = c => c <= 1 ? '☀️' : c === 2 ? '🌤️' : c === 3 ? '☁️'
+  : (c === 45 || c === 48) ? '🌫️' : (c >= 51 && c <= 57) ? '🌦️'
+    : (c >= 61 && c <= 67) ? '🌧️' : (c >= 71 && c <= 77) ? '🌨️'
+      : (c >= 80 && c <= 82) ? '🌦️' : (c >= 85 && c <= 86) ? '🌨️'
+        : c >= 95 ? '⛈️' : '🌡️';
+
+const DIA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+/* Temperatura actual y extendido, en una sola franja compacta.
+   Antes la tarjeta se estiraba con bloques separados; acá va todo junto. */
+function tempHtml(d) {
+  const c = d.wx && d.wx.current;
+  if (!c || c.temperature_2m == null) return '';
+  const t = Math.round(c.temperature_2m);
+  const st = c.apparent_temperature == null ? null : Math.round(c.apparent_temperature);
+  const dl = d.wx.daily;
+  /* cuando se piden varios modelos, Open-Meteo devuelve las variables con
+     sufijo (_ecmwf_ifs025, _gfs_seamless...). Hay que resolverlo o queda NaN. */
+  const pick = (o, base) => {
+    if (!o) return null;
+    if (o[base]) return o[base];
+    const k = Object.keys(o).find(x => x.indexOf(base + '_') === 0);
+    return k ? o[k] : null;
+  };
+  const dMax = pick(dl, 'temperature_2m_max');
+  const dMin = pick(dl, 'temperature_2m_min');
+  const dCode = pick(dl, 'weather_code');
+  const dias = [];
+  if (dl && dl.time && dMax && dMin) {
+    for (let i = 0; i < Math.min(7, dl.time.length); i++) {
+      const f = new Date(dl.time[i] + 'T12:00:00');
+      const mx = Math.round(dMax[i]);
+      const mn = Math.round(dMin[i]);
+      const ico = WX_EMOJI(Number(dCode ? dCode[i] : 0));
+      dias.push('<div style="flex:1;text-align:center;min-width:0">' +
+        '<div style="font-size:10px;color:#8ea2c0;margin-bottom:2px">' + (i === 0 ? 'Hoy' : DIA[f.getDay()]) + '</div>' +
+        '<div style="font-size:15px;line-height:1.1">' + ico + '</div>' +
+        '<div style="font-size:11.5px;color:#e6edf7;margin-top:1px">' + mx + '°</div>' +
+        '<div style="font-size:10px;color:#7d90b3">' + mn + '°</div></div>');
+    }
+  }
+  const hoyMax = dMax ? Math.round(dMax[0]) : null;
+  const hoyMin = dMin ? Math.round(dMin[0]) : null;
+  return '<div style="margin:12px 0 4px">' +
+    '<div style="display:flex;align-items:flex-end;gap:12px">' +
+    '<div style="font-size:40px;line-height:.95;font-weight:300;color:#eaf1fb">' + t + '°</div>' +
+    '<div style="font-size:11.5px;color:#8ea2c0;line-height:1.5;padding-bottom:3px">' +
+    (st != null ? 'Se siente ' + st + '°<br>' : '') +
+    (hoyMax != null ? 'Hoy ' + hoyMax + '° / ' + hoyMin + '°' : '') +
+    '</div></div>' +
+    (dias.length > 2 ? '<div style="display:flex;gap:4px;margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07)">' +
+      dias.join('') + '</div>' : '') +
+    '</div>';
 }
 
 function windHtml(d) {
@@ -1688,6 +2251,25 @@ function viewSettings() {
       : (/iPhone|iPad|iPod/i.test(navigator.userAgent) && !isStandalone())
         ? 'En iPhone los avisos solo funcionan con ASN instalada: Compartir → “Agregar a pantalla de inicio”, y activalos desde ahí.'
         : 'Se activan con un toque y funcionan con la app cerrada. Si el navegador ya bloqueó el permiso, abrilo desde el candado de la barra de direcciones.'}</p>
+    <div class="row"><div class="grow"><b>Avisos técnicos</b><small>${S.ownerTech ? 'Solo este teléfono recibe un aviso si el sistema deja de actualizar' : 'Para enterarte si el sistema se detiene, sin depender de ninguna computadora'}</small></div>
+      <button class="ghost" id="toggleOwner" style="padding:8px 12px;font-size:13px">${S.ownerTech ? 'Desactivar' : 'Activar'}</button>
+    </div>
+    <div class="row"><div class="grow"><b>¿Cómo te resulta ASN?</b><small>${S.myStars ? 'Gracias: ' + S.myStars + ' de 5' : 'Tocá una estrella'}</small></div>
+      <div>${[1, 2, 3, 4, 5].map(n => '<button class="ghost" data-rate="' + n + '" style="padding:6px 9px;margin-left:3px;font-size:15px;' + (S.myStars >= n ? 'color:#fbbf24' : 'opacity:.45') + '">★</button>').join('')}</div>
+    </div>
+    ${S.ownerOk
+      ? '<div class="row"><div class="grow"><b>Uso de la app</b><small>Usuarios: ' +
+        (S.metricsOwner ? S.metricsOwner.users : '—') + ' · Valoraciones: ' +
+        (S.metricsOwner ? S.metricsOwner.ratings : '—') +
+        (S.metricsOwner && S.metricsOwner.avg ? ' · Media ' + S.metricsOwner.avg : '') +
+        '</small></div><button class="ghost" id="ownerOut" style="padding:8px 12px;font-size:13px">Ocultar</button></div>'
+      : S.ownerForm
+        ? '<div class="row"><div class="grow"><b>Clave del dueño</b></div>' +
+          '<input id="ownerKey" type="password" placeholder="clave" style="width:120px;padding:8px;border-radius:10px;border:1px solid #2a3a52;background:#0d1726;color:#dbe6f7;font-size:12px">' +
+          '<button class="ghost" id="saveOwner" style="padding:8px 12px;font-size:13px">Ver</button></div>'
+        : '<div class="row"><div class="grow"><small><a href="#" id="ownerAsk" style="color:#7d90b3;text-decoration:none">Soy el dueño</a></small></div></div>'}
+    ${publicLine()}
+    ${provinciasHtml()}
   </div>
 
   <div class="sec">Qué fuente acierta más acá</div>
@@ -1702,8 +2284,8 @@ function viewSettings() {
       'Sin fenómenos previstos.',
       'Puede pasar algo, no es grave.',
       'Conviene prepararse y guardar cosas.',
-      'Quedate adentro.',
-      'Excepcional: no salir.'
+      'Riesgo alto.',
+      'Excepcional: riesgo extremo.'
     ][i]}</small></div></div>`).join('')}
   </div>
 
@@ -1738,8 +2320,8 @@ const INTRO_SCRIPT = 'ASN cuatro punto cero usa cinco colores. ' +
   'Verde: no hay alerta, está todo tranquilo. ' +
   'Amarilla: puede pasar algo, atención, no es grave. ' +
   'Naranja: se viene lluvia, granizo o ráfagas fuertes. Guardá lo que tengas afuera. ' +
-  'Roja: quedate adentro y evitá salir en auto. ' +
-  'Morada: es un fenómeno excepcional, no salgas. ' +
+  'Roja: riesgo alto, evitá salir en auto y seguí las indicaciones de las autoridades. ' +
+  'Morada: fenómeno excepcional, riesgo extremo. ' +
   'Cada aviso lleva el icono del fenómeno: lluvia, llovizna, lluvia torrencial, granizo, ráfagas, tormenta eléctrica o nieve.';
 
 function openSheet() {
@@ -1766,7 +2348,7 @@ function renderDemo() {
   const line = lvl >= 2 ? 'Varios escenarios coinciden para las próximas 3 horas.'
     : lvl === 1 ? 'Puede caer algo leve en las próximas 3 horas.'
       : 'No se espera nada raro en las próximas 3 horas.';
-  const action = lvl >= 3 ? 'Quedate adentro. Evitá salir en auto si no hace falta.'
+  const action = lvl >= 3 ? 'Riesgo alto. Evitá salir en auto si no hace falta.'
     : lvl === 2 ? 'Guardá lo que tengas afuera y cerrá las ventanas.'
       : lvl === 1 ? 'Si salís, llevá paraguas por las dudas.'
         : 'Buen momento para estar afuera.';
@@ -1885,7 +2467,12 @@ function openGif(id) {
   const p = S.places.find(x => x.id === id);
   const d = S.data[id];
   if (!p || !d) return;
-  if (d.level < 2) { toast('El GIF se habilita desde alerta naranja'); return; }
+  const n = stormNow(p);
+  const etaOk = n && n.eta != null && n.eta <= 120 && !d.sinDato;
+  if (d.level < 1 && !etaOk) {
+    toast('El radar animado aparece cuando hay alerta o una tormenta a menos de 2 h');
+    return;
+  }
 
   gifPlaceId = id;
   gifBlob = null;
@@ -1899,13 +2486,16 @@ function openGif(id) {
   document.getElementById('gifShare').disabled = true;
   document.getElementById('gifSave').disabled = true;
   document.getElementById('gifSheet').hidden = false;
-  buildGif(p, d);
+  buildGif(p, d, n);
 }
 
-async function buildGif(p, d) {
+async function buildGif(p, d, n) {
   const spin = document.getElementById('gifSpin');
+  const note = n && n.eta != null && n.eta <= 120
+    ? 'Tormenta a ' + n.d + ' km · llegaría en ~' + fmtEta(n.eta)
+    : '';
   try {
-    const blob = await ASNRadar.build(p, d.level, phenomenon(d).word);
+    const blob = await ASNRadar.build(p, d.level, phenomenon(d).word, note);
     gifBlob = blob;
     if (gifUrl) URL.revokeObjectURL(gifUrl);
     gifUrl = URL.createObjectURL(blob);
@@ -2015,22 +2605,62 @@ function useGPS() {
 /* ===================== Pregunta en pantalla + radar ===================== */
 const ASK_KEY = 'asn.askedAt';
 
-function askCandidate() {
-  const withData = S.places.filter(p => S.data[p.id] && !S.data[p.id].error);
-  if (!withData.length) return null;
-  return withData.sort((a, b) => levelOf(b) - levelOf(a))[0];
+function quietHours() {
+  const h = new Date().getHours();
+  return h >= 23 || h < 7;
 }
 
-function openAsk() {
-  const p = askCandidate();
-  if (!p) return false;
+/* El pop-up ya no pregunta porque pasaron seis horas: pregunta cuando hay
+   una alerta que lleva un rato y todavía no consultamos en ese episodio.
+   En rojo o morado no se pregunta: se actúa. */
+function askTarget() {
+  const now = Date.now();
+  let best = null;
+  S.places.forEach(p => {
+    const d = S.data[p.id];
+    if (!d || d.error) return;
+    const lvl = d.level || 0;
+    if (lvl < 1 || lvl >= 3) return;
+    const t = S.track[p.id] || {};
+    if (t.askedAt && t.since && t.askedAt >= t.since) return;   /* ya preguntamos en este episodio */
+    if (now - (t.since || now) < 8 * 60 * 1000) return;         /* recién empieza: esperar */
+    if (d.sinDato) return;                                      /* sin dato no hay nada que confirmar */
+    if (!best || lvl > best.lvl) best = { p, d, lvl, t };
+  });
+  return best;
+}
+
+function openAsk(target) {
+  const tg = target || askTarget();
+  if (!tg) return false;
+  const p = tg.p, d = tg.d;
   S.askPlace = p.id;
+
   const el = document.getElementById('askSheet');
   if (!el) return false;
-  document.getElementById('askPlace').textContent = kindOf(p).emoji + ' ' + p.label;
+  const t = S.track[p.id] || {};
+  const ph = phenomenon(d);
+
+  const title = document.getElementById('askTitle');
+  if (title) title.textContent = LEVELS[tg.lvl].name + ' por ' + ph.word;
+
+  const lead = document.getElementById('askPlace');
+  if (lead) {
+    lead.innerHTML = kindOf(p).emoji + ' ' + esc(p.label) +
+      (t.since ? ' · desde las ' + hmText(t.since) : '') +
+      '<br><span style="font-size:12.5px;color:#8fa3c0">¿Qué estás viendo? Con esto sabemos si el aviso se está cumpliendo o ya pasó.</span>';
+  }
+
   const res = document.getElementById('askResult');
   if (res) { res.hidden = true; res.innerHTML = ''; }
+  el.querySelectorAll('[data-askans]').forEach(b => {
+    b.classList.remove('picked');
+    b.style.background = '';
+  });
   el.hidden = false;
+
+  /* queda marcado el episodio: no se vuelve a preguntar por lo mismo */
+  if (S.track[p.id]) { S.track[p.id].askedAt = Date.now(); save(); }
   return true;
 }
 
@@ -2040,15 +2670,166 @@ function closeAsk(mark) {
   if (mark) { try { localStorage.setItem(ASK_KEY, String(Date.now())); } catch (e) { } }
 }
 
+let healthAt = 0;
+/* estado del sistema, leído por el teléfono: cubre el caso en que el cron
+   entero se detenga y no pueda avisar de sí mismo */
+async function checkHealth() {
+  if (Date.now() - healthAt < 30 * 60 * 1000) return;
+  healthAt = Date.now();
+  try {
+    const r = await fetch('/api/health', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const antes = S.healthBad;
+    S.healthBad = j && j.ok === false ? Math.round(j.acumMin || 0) : 0;
+    loadMetrics(); pingUse();
+    if (S.healthBad && S.healthBad !== antes) {
+      toast('Los datos no se actualizan desde hace ' + S.healthBad + ' min');
+    }
+  } catch (e) { }
+}
+
+async function postRating(n) {
+  const dev = (pushSub && pushSub.endpoint) || S.deviceId;
+  if (!dev) { toast('No se pudo identificar el teléfono'); return; }
+  S.myStars = n;
+  save();
+  paint();
+  try {
+    const r = await fetch('/api/rate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: dev, stars: n })
+    });
+    toast(r.ok ? 'Gracias por valorar' : 'No se pudo guardar');
+  } catch (e) { toast('No se pudo guardar'); }
+  loadMetrics(true);
+}
+
+let metricsAt = 0;
+/* uso y valoraciones: exactos sólo con la clave del dueño; el resto,
+   agregados públicos recién cuando hay masa crítica */
+async function loadMetrics(force) {
+  if (!force && Date.now() - metricsAt < 30 * 60 * 1000) return;
+  metricsAt = Date.now();
+  try {
+    const q = S.ownerKey ? '?k=' + encodeURIComponent(S.ownerKey) : '';
+    const r = await fetch('/api/metrics' + q, { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    S.metricsPub = j.publico || null;
+    S.metricsOwner = j.users != null ? j : null;
+    paint();
+    return j;
+  } catch (e) { return null; }
+}
+
+/* prueba social: sólo aparece cuando hay masa crítica */
+function publicLine() {
+  const p = S.metricsPub;
+  if (!p) return '';
+  const a = p.users ? 'La usan ' + p.users + ' personas' : '';
+  const b = p.ratings ? '★ ' + p.avg + ' con ' + p.ratings + ' valoraciones' : '';
+  const t = [a, b].filter(Boolean).join(' · ');
+  if (!t) return '';
+  return '<div class="row"><div class="grow"><small>' + t + '</small></div></div>';
+}
+
+/* dónde se usa, en barras: sólo lo ve el dueño */
+function provinciasHtml() {
+  const m = S.metricsOwner;
+  if (!S.ownerOk || !m || !m.provincias || !m.provincias.length) return '';
+  const list = m.provincias.slice(0, 6);
+  const max = list[0].n || 1;
+  const rows = list.map(x => {
+    const w = Math.round(x.n / max * 100);
+    return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0">' +
+      '<span style="flex:0 0 100px;font-size:12px;color:#c6d4ec">' + esc(x.p) + '</span>' +
+      '<span style="flex:1;height:8px;background:rgba(255,255,255,.07);border-radius:4px;overflow:hidden">' +
+      '<span style="display:block;height:8px;width:' + w + '%;background:#4c8ede"></span></span>' +
+      '<span style="flex:0 0 20px;text-align:right;font-size:12px;color:#9db0c9">' + x.n + '</span></div>';
+  }).join('');
+  return '<div class="row" style="display:block"><small style="color:#9db0c9">Dónde se usa</small>' +
+    '<div style="margin-top:6px">' + rows + '</div></div>';
+}
+
+function provinceOf(p) {
+  const a = (p && p.addr) || '';
+  const parts = a.split(',').map(x => x.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : 'Sin provincia';
+}
+
+let useAt = 0;
+/* dónde se usa: se manda una vez cada 6 h, con la provincia del lugar guardado */
+async function pingUse() {
+  if (!S.deviceId || !S.places.length) return;
+  if (Date.now() - useAt < 6 * 3600 * 1000) return;
+  useAt = Date.now();
+  try {
+    await fetch('/api/use', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device: S.deviceId, prov: provinceOf(S.places.find(x => ((x.addr || '').split(',').length > 1)) || S.places[0]) })
+    });
+  } catch (e) { }
+}
+
 function maybeOpenAsk() {
+  if (quietHours() || document.hidden) return;
   let last = 0;
   try { last = Number(localStorage.getItem(ASK_KEY) || 0); } catch (e) { }
-  if (Date.now() - last < 6 * 60 * 60 * 1000) return;
+  if (Date.now() - last < 45 * 60 * 1000) return;
   const sheet = document.getElementById('askSheet');
   if (sheet && !sheet.hidden) return;
   const tutorial = document.getElementById('sheet');
   if (tutorial && !tutorial.hidden) return;
-  openAsk();
+  const target = askTarget();
+  if (!target) return;
+  openAsk(target);
+}
+
+/* Una respuesta del pop-up tiene que contestar SIEMPRE, aunque falle algo
+   del registro o del radar. Si el radar no contesta, la hoja se cierra sola
+   igual: antes quedaba abierta y parecía que el botón no funcionaba. */
+const ASK_LABEL = {
+  rain: 'Llueve', no: 'No está pasando', hail: 'Cae piedra',
+  gust: 'Hay ráfagas', wind: 'Viento fuerte'
+};
+
+function answerAsk(a, btn) {
+  const p = S.places.find(x => x.id === S.askPlace) || null;
+  const res = document.getElementById('askResult');
+
+  if (btn) {
+    btn.classList.add('picked');
+    btn.style.background = '#1f3350';
+  }
+  if (res) {
+    res.hidden = false;
+    res.innerHTML = '<b>Anotado: ' + (ASK_LABEL[a] || 'recibido') + '.</b><br>Revisando el radar de tu zona…';
+  }
+
+  /* La hoja se cierra ANTES de cualquier trabajo: si algo tarda o falla,
+     la pantalla nunca queda tapada y la app sigue respondiendo. */
+  closeAsk(true);
+  toast('Anotado: ' + (ASK_LABEL[a] || 'recibido') + '. Gracias');
+
+  if (!p) return;
+
+  try { recordFeedback(p, a); } catch (e) { }
+  try { evaluateReport(p, a); } catch (e) { }
+
+  radarCheck(p).then(r => {
+    try {
+      if (a === 'rain') learnAdd(p.id, 'lluvia', 'radar', r === 'rain');
+      if (a === 'no') learnAdd(p.id, 'calma', 'radar', r === 'clear');
+      const fb = S.feedback[S.feedback.length - 1];
+      if (fb && !fb.radar) { fb.radar = r; save(); }
+    } catch (e) { }
+  }).catch(() => { });
+
+  /* relee los datos con el reporte ya incorporado, sin bloquear nada */
+  setTimeout(() => { try { refresh(); } catch (e) { } }, 1500);
 }
 
 /* Cruza el reporte del usuario con el radar de RainViewer (tiles con CORS) */
@@ -2151,13 +2932,14 @@ function recordFeedback(p, a) {
   const d = S.data[p.id];
   if (!d) return;
   const pred = {};
-  d.models.forEach(m => {
+  (Array.isArray(d.models) ? d.models : []).forEach(m => {
+    const hrs = Array.isArray(m.hours) ? m.hours : [];
     pred[m.m] = {
       rain: m.rain, wind: m.wind, hail: false,
-      gust: m.hours.slice(0, 3).some(h => h.gust >= 40)
+      gust: hrs.slice(0, 3).some(h => h.gust >= 40)
     };
   });
-  S.feedback.push({ p: p.label, t: Date.now(), a, pred, level: d.level, radar: null });
+  S.feedback.push({ id: p.id, p: p.label, t: Date.now(), a, pred, level: d.level, radar: null });
   S.feedback = S.feedback.slice(-200);
   save();
 }
@@ -2214,6 +2996,15 @@ function supportClose() {
   try { localStorage.setItem(SUPPORT_KEY, String(Date.now())); } catch (e) { }
 }
 
+/* Los botones de la hoja de apoyo no tienen id: el ruteo general resuelve
+   al contenedor y el clic no llegaba a supportClose. Listener propio. */
+document.addEventListener('click', ev => {
+  const b = ev.target && ev.target.closest
+    ? ev.target.closest('#supportSheet [data-closesupport],#supportBar [data-closesupport]')
+    : null;
+  if (b) supportClose();
+}, true);
+
 /* el peor nivel que hay en pantalla, sea de clima o de río */
 function worstLevel() {
   let w = 0;
@@ -2246,15 +3037,26 @@ function supportPopup() {
   if (go) go.focus();
 }
 
+/* Regla de producto: desde nivel 2 (clima o río) no se pide dinero.
+   Ni hoja completa ni barra chica: primero la alerta. */
+function hideSupport() {
+  const bar = document.getElementById('supportBar');
+  if (bar) bar.hidden = true;
+  const sheet = document.getElementById('supportSheet');
+  if (sheet) sheet.hidden = true;
+  document.body.classList.remove('has-bar');
+}
+
 /* Decide cómo invitar según lo que esté pasando:
-   sin alerta → hoja completa. Con alerta → barra chica al pie.
-   En nivel 4 (evacuación) no se pide nada. */
+   sin alerta → hoja completa. Con amarilla (nivel 1) → barra chica al pie.
+   Desde nivel 2 no se pide nada. */
 function supportInvite() {
   if (supportSeen() || !S.places.length) return;
   if (document.querySelector('.sheet-wrap:not([hidden])')) return;
 
+  /* el nivel ya calculado de cada lugar (clima + río), sin pedir nada a la red */
   const w = worstLevel();
-  if (w >= 4) return;
+  if (w >= 2) { hideSupport(); return; }
 
   if (w >= 1) {
     const bar = document.getElementById('supportBar');
@@ -2268,8 +3070,26 @@ function supportInvite() {
 }
 
 /* ===================== Eventos ===================== */
+/* La hoja de consulta escucha en captura: si otra capa corta el evento,
+   el botón igual responde. */
+(function () {
+  const sh = document.getElementById('askSheet');
+  if (!sh) return;
+  sh.addEventListener('click', ev => {
+    const b = ev.target.closest ? ev.target.closest('[data-askans]') : null;
+    if (!b) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    answerAsk(b.getAttribute('data-askans'), b);
+  }, true);
+})();
+
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-pick],[data-del],[data-ask],[data-ans],[data-askans],[data-close],[data-closeask],[data-wind],[data-phen],[data-dismiss],[data-kind],[data-share],[data-gif],[data-edit],[data-ekind],[data-closeedit],[data-closegif],[data-hydro],[data-geo],[data-travel],#gifShare,#gifSave,[data-closemenu],[data-closesupport],[data-open],#menu,#geoBtn,#supportGo,#shareApp,#editSave,#startAdd,#addPlace,#refresh,#back,#enableNotify,#wipe,#gps,#reopenIntro,#startBtn,#installBtn,#testPush,#disablePush,#speakIntro,#toggleVoice,#toggleSound,#testSound');
+  /* Esta linea se perdio al borrar el boton del radar: sin ella, t no
+     existia y NINGUN clic de la app funcionaba. */
+  /* la lista tiene que incluir TODOS los atributos accionables: si falta uno,
+     closest() devuelve el contenedor con id y el botón no hace nada */
+  const t = ev.target.closest ? ev.target.closest('[id],[data-k],[data-close],[data-closeask],[data-closeedit],[data-closegif],[data-edit],[data-ekind],[data-askans],[data-rate],[data-dismiss],[data-share],[data-geo],[data-travel],[data-gif]') : null;
   if (!t) return;
 
   if (t.id === 'shareApp') { shareApp(); return; }
@@ -2280,31 +3100,46 @@ document.addEventListener('click', ev => {
   if (t.hasAttribute('data-closesupport')) { supportClose(); return; }
   if (t.id === 'supportGo') { supportClose(); return; }
   if (t.hasAttribute('data-closeask')) { closeAsk(true); return; }
+  if (t.hasAttribute('data-rate')) {
+    postRating(Number(t.getAttribute('data-rate')));
+    return;
+  }
+
+  if (t.id === 'ownerAsk') { S.ownerForm = true; paint(); return; }
+
+  if (t.id === 'ownerOut') {
+    S.ownerOk = false; S.ownerForm = false; S.ownerKey = '';
+    save(); paint();
+    return;
+  }
+
+  if (t.id === 'saveOwner') {
+    const inp = document.getElementById('ownerKey');
+    S.ownerKey = inp ? inp.value.trim() : '';
+    save();
+    loadMetrics(true).then(j => {
+      S.ownerOk = !!(j && j.users != null);
+      S.ownerForm = !S.ownerOk;
+      if (!S.ownerOk) toast('Esa clave no es válida');
+      save();
+      paint();
+    });
+    return;
+  }
+
+  if (t.id === 'toggleOwner') {
+    if (!S.pushActive) { toast('Activá primero los avisos en tiempo real'); return; }
+    S.ownerTech = !S.ownerTech;
+    save();
+    postSubscription(pushSub).then(ok => {
+      toast(!ok ? 'No se pudo guardar' : S.ownerTech ? 'Avisos técnicos activados en este teléfono' : 'Avisos técnicos desactivados');
+    });
+    paint();
+    return;
+  }
+
   if (t.hasAttribute('data-askans')) {
-    const a = t.getAttribute('data-askans');
-    const p = S.places.find(x => x.id === S.askPlace);
-    const res = document.getElementById('askResult');
-    if (p) { recordFeedback(p, a); evaluateReport(p, a); }
-    if (res) {
-      res.hidden = false;
-      res.innerHTML = '<b>¡Gracias por el reporte!</b><br>Revisando el radar de tu zona…';
-    }
-    if (p) {
-      radarCheck(p).then(r => {
-        if (a === 'rain') learnAdd(p.id, 'lluvia', 'radar', r === 'rain');
-        if (a === 'no') learnAdd(p.id, 'calma', 'radar', r === 'clear');
-        const fb = S.feedback[S.feedback.length - 1];
-        if (fb && !fb.radar) fb.radar = r;
-        save();
-        if (res) {
-          res.innerHTML = '<b>¡Gracias por el reporte!</b><br>' + radarText(a, r) +
-            '<br><span style="color:#7d90b3;font-size:12px">Con esto ASN aprende qué fuente acierta en tu zona.</span>';
-        }
-        setTimeout(() => { closeAsk(true); toast('Reporte guardado. Gracias'); }, 5000);
-      });
-    } else {
-      closeAsk(true);
-    }
+    answerAsk(t.getAttribute('data-askans'), t);
     return;
   }
 
@@ -2574,6 +3409,14 @@ document.addEventListener('keydown', e => {
   document.addEventListener(ev, unlockAudio, { once: true, passive: true }));
 
 document.addEventListener('DOMContentLoaded', init);
+
+
+
+
+
+
+
+
 
 
 

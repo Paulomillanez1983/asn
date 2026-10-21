@@ -5,6 +5,9 @@
  * - Cron cada 10 min: calcula riesgo y envía push
  */
 import { buildPushPayload } from '@block65/webcrypto-web-push';
+import { CUENCAS } from './cuenca-datos.js';
+import { NIVEL_CUENCA } from './nivel-datos.js';
+import { etaForPlace } from './storm-eta.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -13,7 +16,17 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
+    /* latido: deja constancia de que el cron corrió, sin depender de nada local */
+    ctx.waitUntil(env.SUBS.put('hb:cron', JSON.stringify({ at: Date.now() })));
     ctx.waitUntil(runAlerts(env));
+    ctx.waitUntil(vigilar(env));
+    /* el acta se guarda una vez por hora, en la primera pasada */
+    if (new Date().getUTCMinutes() < 10) ctx.waitUntil(guardarActa(env));
+    /* una foto por hora: es la materia prima para calibrar el tiempo de
+       llegada, que hoy no se puede medir porque las tablas publicas solo
+       guardan una ventana movil de 57 horas. */
+    ctx.waitUntil(acumular(env));
+    ctx.waitUntil(acumularBrasil(env));
   }
 };
 
@@ -56,7 +69,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://tilecache.rainviewer.com https://gibs.earthdata.nasa.gov",
+    "img-src 'self' data: blob: https://tilecache.rainviewer.com https://server.arcgisonline.com https://gibs.earthdata.nasa.gov",
   "connect-src 'self'",
   "font-src 'self'",
   "object-src 'none'",
@@ -95,7 +108,11 @@ async function kvPut(env, key, val, opts) {
   try {
     if (opts) await env.SUBS.put(key, val, opts);
     else await env.SUBS.put(key, val);
-  } catch (e) { }
+    return true;
+  } catch (e) {
+    console.error('kvPut fallo', key, String(e));
+    return false;
+  }
 }
 /* ---------------- Caché HTTP ----------------
    Las respuestas caras (río, estaciones, arroyos) se guardan en la caché
@@ -168,6 +185,110 @@ async function pipeJson(target, ttl = 300, extra = {}) {
   return res;
 }
 
+/* ---------------- Ensemble (51 miembros) ----------------
+   Es la consulta más cara y la que provocaba los 429: la app pedía una
+   por cada lugar, cada vez. Se resuelve así:
+   - una sola consulta por zona, redondeando a 0,1° (≈11 km, más fino que
+     la grilla de 0,25° del propio modelo, así que no se pierde nada);
+   - guardada 30 minutos en la caché del borde;
+   - si la fuente responde 429 o falla, se devuelve el último dato bueno
+     en lugar de dejar al usuario sin pronóstico. */
+const ENS_TTL = 30 * 60 * 1000;
+
+function snap10(v) {
+  return (Math.round(Number(v) * 10) / 10).toFixed(1);
+}
+
+function staleCopy(res) {
+  return new Response(res.body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-at': res.headers.get('x-at') || '',
+      'x-stale': '1'
+    }
+  });
+}
+
+async function ensProxy(lat, lon) {
+  const la = snap10(lat), lo = snap10(lon);
+  const key = CACHE_HOST + '/ens/' + la + ',' + lo;
+  const cache = caches.default;
+
+  let prev = null;
+  try { prev = await cache.match(new Request(key)); } catch (e) { prev = null; }
+  if (prev) {
+    const at = Number(prev.headers.get('x-at') || 0);
+    if (at && Date.now() - at < ENS_TTL) return prev;
+  }
+
+  /* Open-Meteo limita por IP y la salida de Cloudflare es una IP compartida:
+     cuando contesta 429 no tiene sentido volver a intentar en cada refresco
+     de cada usuario. Una marca de "en pausa" corta el golpeteo 10 minutos. */
+  const pauseKey = key + '/down';
+  try {
+    const down = await cache.match(new Request(pauseKey));
+    if (down) {
+      const at = Number(down.headers.get('x-at') || 0);
+      if (at && Date.now() - at < 10 * 60 * 1000) {
+        if (prev) return staleCopy(prev);
+        return json({ error: 'ensemble en pausa' }, 503);
+      }
+    }
+  } catch (e) { }
+
+  const t = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
+  t.searchParams.set('latitude', la);
+  t.searchParams.set('longitude', lo);
+  t.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
+  t.searchParams.set('models', 'ecmwf_ifs025');
+  t.searchParams.set('forecast_hours', '4');
+  t.searchParams.set('timezone', 'auto');
+  t.searchParams.set('wind_speed_unit', 'kmh');
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 12000);
+  let r = null, body = '';
+  try {
+    r = await fetch(t.toString(), { signal: ctl.signal, headers: { accept: 'application/json' } });
+    body = await r.text();
+  } catch (e) {
+    clearTimeout(timer);
+    try {
+      await cache.put(new Request(pauseKey), new Response('1', { headers: { 'x-at': String(Date.now()) } }));
+    } catch (err) { }
+    return prev ? staleCopy(prev) : json({ error: 'ensemble no disponible' }, 502);
+  }
+  clearTimeout(timer);
+
+  if (!r.ok) {
+    /* 429 o error de la fuente: mejor el dato de hace un rato que nada */
+    try {
+      await cache.put(new Request(pauseKey), new Response('1', { headers: { 'x-at': String(Date.now()) } }));
+    } catch (e) { }
+    if (prev) return staleCopy(prev);
+    return new Response(body || JSON.stringify({ error: 'ensemble HTTP ' + r.status }), {
+      status: r.status,
+      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+    });
+  }
+
+  const out = new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=1800',
+      'x-at': String(Date.now())
+    }
+  });
+  try {
+    await cache.put(new Request(key), out.clone());
+    await cache.delete(new Request(pauseKey));
+  } catch (e) { }
+  return out;
+}
+
 async function proxy(url) {
   const lat = Number(url.searchParams.get('lat'));
   const lon = Number(url.searchParams.get('lon'));
@@ -220,9 +341,9 @@ async function proxy(url) {
     t.searchParams.set('latitude', la);
     t.searchParams.set('longitude', lo);
     t.searchParams.set('hourly', 'precipitation,precipitation_probability,wind_gusts_10m,cape,weather_code,freezing_level_height,snowfall,snow_depth,cloud_cover');
-    t.searchParams.set('current', 'temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
-    t.searchParams.set('daily', 'sunrise,sunset');
-    t.searchParams.set('forecast_days', '2');
+    t.searchParams.set('current', 'temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_gusts_10m');
+    t.searchParams.set('daily', 'sunrise,sunset,temperature_2m_max,temperature_2m_min,weather_code');
+    t.searchParams.set('forecast_days', '7');
     t.searchParams.set('models', 'ecmwf_ifs025,gfs_seamless,icon_seamless,gem_seamless');
     t.searchParams.set('forecast_hours', '13');
     t.searchParams.set('timezone', 'auto');
@@ -241,15 +362,7 @@ async function proxy(url) {
   }
 
   if (path === '/api/ens') {
-    const t = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
-    t.searchParams.set('latitude', la);
-    t.searchParams.set('longitude', lo);
-    t.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
-    t.searchParams.set('models', 'ecmwf_ifs025');
-    t.searchParams.set('forecast_hours', '4');
-    t.searchParams.set('timezone', 'auto');
-    t.searchParams.set('wind_speed_unit', 'kmh');
-    return pipeJson(t.toString(), 240);
+    return await ensProxy(lat, lon);
   }
 
   if (path === '/api/met') {
@@ -280,6 +393,8 @@ async function proxy(url) {
 async function api(req, env, url) {
   const rules = {
     '/api/hydro': [60, 'hydro'],
+    '/api/cuenca': [60, 'cuenca'],
+    '/api/dictamen': [60, 'dictamen'],
     '/api/rivers': [30, 'rivers'],
     '/api/subscribe': [20, 'sub'],
     '/api/test': [10, 'test'],
@@ -315,10 +430,12 @@ async function api(req, env, url) {
       last: (prev && prev.last) || {},
       at: (prev && prev.at) || {},
       ph: (prev && prev.ph) || {},
-      hydroLast: (prev && prev.hydroLast) || {}
+      hydroLast: (prev && prev.hydroLast) || {},
+      owner: body.owner === true ? true : body.owner === false ? false : !!(prev && prev.owner)
     };
-    await kvPut(env, key, JSON.stringify(rec));
-    return json({ ok: true, id, places: places.length });
+    const guardado = await kvPut(env, key, JSON.stringify(rec));
+    /* si no se guardó, no se puede prometer que los avisos van a llegar */
+    return json({ ok: guardado, id, places: places.length }, guardado ? 200 : 503);
   }
 
   if (url.pathname === '/api/unsubscribe' && req.method === 'POST') {
@@ -326,6 +443,143 @@ async function api(req, env, url) {
     if (!body || !body.endpoint) return json({ error: 'falta endpoint' }, 400);
     await env.SUBS.delete('sub:' + await hash(body.endpoint));
     return json({ ok: true });
+  }
+
+  /* Métricas mínimas: sin IP, sin nombre, sin coordenadas. */
+  if (url.pathname === '/api/ping' && req.method === 'POST') {
+    let b = null;
+    try { b = await req.json(); } catch (e) { }
+    if (!b) return json({ ok: false }, 400);
+    const day = new Date().toISOString().slice(0, 10);
+    const key = 'stats/' + day + '.json';
+    let cur = { d: day, total: 0, s: 0, w: 0, prov: {}, ver: {}, plat: {} };
+    try {
+      const o = await env.NOWCAST.get(key);
+      if (o) cur = JSON.parse(await o.text());
+    } catch (e) { }
+    cur.total++;
+    if (b.m === 's') cur.s++; else cur.w++;
+    const inc = (obj, k) => { if (!k) return; k = String(k).slice(0, 28); obj[k] = (obj[k] || 0) + 1; };
+    cur.prov = cur.prov || {}; cur.ver = cur.ver || {}; cur.plat = cur.plat || {};
+    inc(cur.prov, b.p); inc(cur.ver, b.v); inc(cur.plat, b.pf);
+    try { await env.NOWCAST.put(key, JSON.stringify(cur)); } catch (e) { }
+    return json({ ok: true });
+  }
+
+    /* Vigilancia del propio sistema: si el cron o el acumulador se detienen,
+       esto lo dice sin que nadie tenga la computadora prendida. */
+    if (url.pathname === '/api/health') {
+      return json(await healthData(env));
+    }
+
+    /* acta de auditoría: la última guardada, o una nueva con ?run=1 */
+    if (url.pathname === '/api/audit') {
+      if (url.searchParams.get('run') === '1') return json(await guardarActa(env));
+      const now = Date.now();
+      for (let i = 0; i < 3; i++) {
+        const k = 'audit/' + new Date(now - i * 3600000).toISOString().slice(0, 13) + '.json';
+        try {
+          const o = await env.NOWCAST.get(k);
+          if (o) return new Response(o.body, { headers: { 'content-type': 'application/json; charset=utf-8', 'x-at': k } });
+        } catch (e) { }
+      }
+      return json(await auditData(env));
+    }
+
+    /* Uso y valoraciones. Los números exactos se muestran sólo al dueño
+       (clave en OWNER_KEY); el resto ve los agregados recién cuando hay
+       masa crítica: 100 dispositivos y 100 valoraciones. */
+    if (url.pathname === '/api/metrics') {
+      let users = 0;
+      try {
+        let cursor = null;
+        do {
+          const page = await env.SUBS.list({ prefix: 'sub:', cursor });
+          users += (page.keys || []).length;
+          cursor = page.list_complete ? null : page.cursor;
+        } while (cursor);
+      } catch (e) { }
+
+      let n = 0, sum = 0, dist = [0, 0, 0, 0, 0];
+      try {
+        const page = await env.SUBS.list({ prefix: 'rate:' });
+        for (const k of (page.keys || []).slice(0, 900)) {
+          const r = await env.SUBS.get(k.name, 'json');
+          if (!r || !r.stars) continue;
+          n++; sum += r.stars; dist[Math.min(4, Math.max(0, r.stars - 1))]++;
+        }
+      } catch (e) { }
+
+      /* dónde se usa: provincia declarada por el lugar guardado */
+      const prov = {};
+      try {
+        const page = await env.SUBS.list({ prefix: 'use:' });
+        for (const k of (page.keys || []).slice(0, 900)) {
+          const u = await env.SUBS.get(k.name, 'json');
+          const p = u && u.prov ? String(u.prov).slice(0, 40) : 'Sin provincia';
+          prov[p] = (prov[p] || 0) + 1;
+        }
+      } catch (e) { }
+      const provincias = Object.keys(prov)
+        .map(p => ({ p, n: prov[p] }))
+        .sort((a, b) => b.n - a.n);
+
+      const avg = n ? Math.round(sum / n * 10) / 10 : null;
+      const publico = { users: users >= 100 ? users : null, ratings: n >= 100 ? n : null, avg: n >= 100 ? avg : null };
+      const owner = url.searchParams.get('k') && env.OWNER_KEY && url.searchParams.get('k') === env.OWNER_KEY;
+
+      /* limpieza de las filas de prueba (no cuentan como usuarios reales) */
+      if (owner && url.searchParams.get('clean') === '1') {
+        for (const t of ['prueba-destino-123', 'prueba-prov-1']) {
+          const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+          const id = [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+          try { await env.SUBS.delete('rate:' + id); await env.SUBS.delete('use:' + id); } catch (e) { }
+        }
+      }
+      return json(owner ? { users, ratings: n, avg, dist, provincias, publico } : { publico });
+    }
+
+    if (url.pathname === '/api/use' && req.method === 'POST') {
+      const b = await req.json().catch(() => null);
+      if (!b || !b.device) return json({ error: 'falta device' }, 400);
+      const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(b.device)));
+      const id = [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 32);
+      try { await env.SUBS.put('use:' + id, JSON.stringify({ prov: String(b.prov || '').slice(0, 40), at: Date.now() })); } catch (e) { return json({ error: 'no se pudo guardar' }, 500); }
+      return json({ ok: true });
+    }
+
+    if (url.pathname === '/api/rate' && req.method === 'POST') {
+      const body = await req.json().catch(() => null);
+      const stars = Number(body && body.stars);
+      if (!body || !body.endpoint || !(stars >= 1 && stars <= 5)) return json({ error: 'datos inválidos' }, 400);
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(body.endpoint)));
+      const id = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+      try {
+        await env.SUBS.put('rate:' + id, JSON.stringify({ stars: Math.round(stars), at: Date.now() }));
+      } catch (e) { return json({ error: 'no se pudo guardar' }, 500); }
+      return json({ ok: true });
+    }
+
+    if (url.pathname === '/api/stats') {
+    const day = new Date().toISOString().slice(0, 10);
+    let cur = null;
+    try {
+      const o = await env.NOWCAST.get('stats/' + day + '.json');
+      if (o) cur = JSON.parse(await o.text());
+    } catch (e) { }
+    const base = cur || { d: day, total: 0, s: 0, w: 0, prov: {}, ver: {}, plat: {} };
+    const days = [];
+    try {
+      const list = await env.NOWCAST.list({ prefix: 'stats/', limit: 60 });
+      const keys = list.objects.map(o => o.key).sort().slice(-14);
+      for (const k of keys) {
+        const o = await env.NOWCAST.get(k);
+        if (!o) continue;
+        const j = JSON.parse(await o.text());
+        days.push({ d: j.d, t: j.total || 0, s: j.s || 0, w: j.w || 0 });
+      }
+    } catch (e) { }
+    return json(Object.assign({}, base, { days }));
   }
 
   /* Nowcast: la ingesta publica cada 10 minutos; la app solo lee. */
@@ -361,6 +615,54 @@ async function api(req, env, url) {
     const lon = Number(url.searchParams.get('lon'));
     if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
     return json(await riversNear(env, lat, lon));
+  }
+
+  if (url.pathname === '/api/brasil' && req.method === 'GET') {
+    if (!env.NOWCAST) return json({ error: 'sin almacenamiento' }, 500);
+    if (url.searchParams.get('run') === '1') {
+      try { await acumularBrasil(env); } catch (e) { }
+    }
+    if (env.SUBS) {
+      const kv = await env.SUBS.get('brasil:latest', 'json');
+      if (kv) return json({ ok: true, ...kv, origen: 'kv' });
+    }
+    const l = await env.NOWCAST.list({ prefix: 'acum/brasil/', limit: 1000 });
+    const keys = (l.objects || []).map(o => o.key).sort();
+    if (!keys.length) return json({ ok: false, motivo: 'sin calculo todavia' });
+    const obj = await env.NOWCAST.get(keys[keys.length - 1]);
+    const data = obj ? JSON.parse(await obj.text()) : null;
+    return json({ ok: !!data, ...(data || {}), archivos: keys.length });
+  }
+
+  if (url.pathname === '/api/acumulado' && req.method === 'GET') {
+    let corrida = null;
+    if (url.searchParams.get('run') === '1') {
+      try { corrida = await acumular(env); } catch (e) { corrida = { error: String(e && e.message) }; }
+    }
+    if (!env.NOWCAST) return json({ error: 'sin almacenamiento' }, 500);
+    const l = await env.NOWCAST.list({ prefix: 'acum/v1/', limit: 1000 });
+    const keys = (l.objects || []).map(o => o.key).sort();
+    return json({
+      corrida,
+      objetos: keys.length,
+      primero: keys[0] || null,
+      ultimo: keys[keys.length - 1] || null,
+      truncado: !!l.truncated
+    });
+  }
+
+  if (url.pathname === '/api/dictamen' && req.method === 'GET') {
+    const lat = Number(url.searchParams.get('lat'));
+    const lon = Number(url.searchParams.get('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+    return json(await dictamen(env, lat, lon));
+  }
+
+  if (url.pathname === '/api/cuenca' && req.method === 'GET') {
+    const lat = Number(url.searchParams.get('lat'));
+    const lon = Number(url.searchParams.get('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return json({ error: 'faltan coordenadas' }, 400);
+    return json(await cuencaFor(env, lat, lon));
   }
 
   if (url.pathname === '/api/hydro' && req.method === 'GET') {
@@ -612,11 +914,15 @@ async function inaNear(env, lat, lon) {
     } catch (e) { }
   }
   if (!list) return [];
+  /* antes se exigía s.r (nombre de río): eso descartaba estaciones con serie
+     de nivel pero sin el campo "rio" cargado en INA (Las Tapias, Tercero -
+     Villa María, Anizacate). Ahora se filtra solo por distancia y la serie
+     se verifica más adelante. */
   return list
     .map(s => ({ ...s, d: distKm(lat, lon, s.lat, s.lon) }))
-    .filter(s => s.d <= 80 && s.r)
+    .filter(s => s.d <= 90)
     .sort((a, b) => a.d - b.d)
-    .slice(0, 3);
+    .slice(0, 6);
 }
 
 async function overpassJson(q) {
@@ -727,13 +1033,17 @@ async function inaSeries(env, st) {
         .filter(x => isFinite(x.v))
         .sort((a, b) => a.d.localeCompare(b.d));
       const vals = rows.map(x => x.v);
-      if (vals.length > 500) {
+      if (vals.length >= 120) {
         const r2d = v => Math.round(v * 100) / 100;
         out.p90 = r2d(percentile(vals, 0.90));
         out.p95 = r2d(percentile(vals, 0.95));
         out.p99 = r2d(percentile(vals, 0.99));
-        out.max = r2d(Math.max(...vals));
+        /* Math.max(...vals) revienta la pila con series de decenas de miles
+           de lecturas: el error se tragaba el try y la estación quedaba sin
+           percentiles, que luego se leía como "río bajo". */
+        out.max = r2d(vals.reduce((a, b) => (b > a ? b : a), -Infinity));
         out.histN = vals.length;
+        out.thin = vals.length < 365;
         /* días altos (>= p95) para poder decir "no se veía desde…" */
         out.above = rows.filter(x => x.v >= out.p95).map(x => [x.d, r2d(x.v)]);
       }
@@ -789,8 +1099,13 @@ async function inaNow(env, seriesId) {
   let peak = win[0];
   win.forEach(r => { if (r.v > peak.v) peak = r; });
 
+  /* cuántas horas pasaron desde la última lectura: una medición vieja no es
+     una medición de hoy y no puede sostener un "está bajo". */
+  const ageH = Math.max(0, (Date.now() - new Date(last.d).getTime()) / 3600000);
+
   const out = {
     at: Date.now(), now: rd(last.v), date: last.d,
+    ageH: Math.round(ageH * 10) / 10,
     d1: rd(d1), d3: rd(d3), d7: rd(d7),
     slope: Math.round(slope * 1000) / 1000,
     trend,
@@ -802,9 +1117,11 @@ async function inaNow(env, seriesId) {
   return out;
 }
 
-/* 0..4 según qué tan alto está el agua frente a los umbrales de ESA estación */
+/* 0..4 según qué tan alto está el agua frente a los umbrales de ESA estación.
+   Devuelve null cuando no hay referencia: sin umbrales ni percentiles no se
+   puede afirmar que el río esté bajo. */
 function hydroLevel(r, s) {
-  if (r == null || !s) return 0;
+  if (r == null || !s) return null;
   if (s.ev != null) {
     if (r >= s.ev + 0.5) return 4;
     if (r >= s.ev) return 3;
@@ -821,6 +1138,7 @@ function hydroLevel(r, s) {
   if (s.p99 != null && r >= s.p99) return 3;
   if (s.p95 != null && r >= s.p95) return 2;
   if (s.p90 != null && r >= s.p90) return 1;
+  if (s.p95 == null && s.p90 == null) return null;
   return 0;
 }
 
@@ -829,23 +1147,27 @@ const fmtM = v => (v == null ? '' : (Math.round(v * 100) / 100).toFixed(2).repla
 /* texto llano, explicativo, sin jerga */
 function hydroWords(level, o) {
   const r = o.now, al = o.al, ev = o.ev;
+  /* sin medición no se afirma calma: "nivel habitual" sería una invención */
+  if (r == null) return ['Sin dato del río', 'No hay una medición disponible para este río en este momento.', 'No lo damos por tranquilo: si estás cerca del agua, mirá cómo está.'];
   const T = {
     0: ['El río está bajo', 'El río está en su nivel habitual para esta época.',
       'Podés seguir con tu vida normal.'],
     1: ['El río está subiendo', 'El río viene creciendo y se está acercando al nivel de alerta.',
-      'Todavía no hay que evacuar. Si vivís cerca de la costa o en zona baja, estate atento.'],
+       'Si vivís cerca de la costa o en zona baja, estate atento y seguí las indicaciones de Defensa Civil.'],
     2: ['Alerta por crecida', 'El agua llegó al nivel de alerta: ya empieza a entrar en las zonas bajas y a cortar caminos.',
-      'Sacá del piso lo que puedas y tené listo lo importante por si hay que salir. Evitá la costa.'],
-    3: ['Crecida: hay que salir', 'El agua llegó al nivel de evacuación: las zonas bajas se inundan.',
-      'Si estás en zona baja o cerca de la costa, salí y no vuelvas hasta que el agua baje. No cruces calles anegadas.'],
+       'Tené a mano lo importante y evitá la costa. Seguí las indicaciones de Defensa Civil.'],
+    3: ['Crecida: el agua llegó al nivel de evacuación', 'El agua llegó al nivel de evacuación: las zonas bajas se inundan.',
+       'Si estás en zona baja o cerca de la costa, tomá precauciones y seguí las indicaciones de Defensa Civil. Evitá cruzar calles anegadas.'],
     4: ['Crecida grave', 'El agua ya pasó el nivel de evacuación y la zona baja está bajo agua.',
-      'Si estás en zona baja o cerca de la costa, salí ahora. No vuelvas hasta que las autoridades lo confirmen. Pedí ayuda a Defensa Civil o a emergencias.']
+       'Si estás en zona baja o cerca de la costa, buscá un lugar seguro y seguí las indicaciones de Defensa Civil. Evitá cruzar calles anegadas.']
   };
   const [headline, line, advice] = T[level] || T[0];
 
   /* --- piezas sueltas, para que la interfaz las acomode y no sea un ladrillo --- */
   const measured = r != null
-    ? 'Hoy el agua está en ' + fmtM(r) +
+    ? (r < 0
+      ? 'Hoy el agua está ' + fmtM(Math.abs(r)) + ' por debajo del cero de la escala, que es habitual en esta estación'
+      : 'Hoy el agua está en ' + fmtM(r)) +
       (() => {
         const refs = [];
         if (al != null) refs.push('alerta ' + fmtM(al));
@@ -903,7 +1225,7 @@ function hydroWords(level, o) {
 }
 
 async function hydroFor(env, lat, lon) {
-  const key = `hydro:v11:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const key = `hydro:v12:${lat.toFixed(3)},${lon.toFixed(3)}`;
   const hit = await cGet(key, 30 * 60 * 1000);
   if (hit) return hit;
 
@@ -926,8 +1248,10 @@ async function hydroFor(env, lat, lon) {
     const past = arr.slice(0, 92).filter(v => v != null);
     const q = arr[92] != null ? arr[92] : (past.length ? past[past.length - 1] : null);
     out.q = q;
-    out.p90 = percentile(past, 0.9);
-    out.p95 = percentile(past, 0.95);
+    /* estos percentiles son de CAUDAL (m³/s), no de altura del agua.
+       Antes se guardaban en p90/p95 y se mezclaban con los de nivel. */
+    out.q90 = percentile(past, 0.9);
+    out.q95 = percentile(past, 0.95);
   } catch (e) { }
 
   try {
@@ -957,14 +1281,24 @@ async function hydroFor(env, lat, lon) {
   }
   out.riverPoint = riverPoint ? { lat: riverPoint.lat, lon: riverPoint.lon } : null;
 
-  /* 1º: estación con umbrales oficiales cerca. 2º: la más cercana. */
-  const probe = out.stations.find(s => s.al != null && s.d <= 30) || st;
-
-  let src = null, obs = null;
-  if (probe) {
+  /* Se prueban varias estaciones cercanas hasta dar con una que tenga serie
+     de nivel con datos. Antes se elegía una sola y, si no servía, se caía al
+     modelo global aunque hubiera un río medido a pocos kilómetros. */
+  let probe = null, src = null, obs = null, bestScore = null;
+  for (const cand of out.stations.slice(0, 6)) {
     try {
-      src = await inaSeries(env, probe);
-      if (src) obs = await inaNow(env, src.seriesId);
+      const s2 = await inaSeries(env, cand);
+      if (!s2) continue;
+      const o2 = await inaNow(env, s2.seriesId);
+      if (!o2 || o2.now == null) continue;
+      /* no alcanza con que exista una serie: Villa María tiene una vieja que
+         terminó en 2022 y otra al lado que llega a hoy. Se prefiere la
+         lectura fresca, después la que tiene historial, después la más cerca. */
+      const score = (o2.ageH != null && o2.ageH <= 24 ? 0 : 1000) +
+        (s2.histN != null && s2.histN >= 120 ? 0 : 100) + cand.d;
+      if (bestScore == null || score < bestScore) {
+        bestScore = score; probe = cand; src = s2; obs = o2;
+      }
     } catch (e) { }
   }
 
@@ -977,6 +1311,8 @@ async function hydroFor(env, lat, lon) {
     out.al = src.al != null ? src.al : null;
     out.ev = src.ev != null ? src.ev : null;
     out.ab = src.ab != null ? src.ab : null;
+    out.p90 = src.p90 != null ? src.p90 : null;
+    out.p95 = src.p95 != null ? src.p95 : null;
     out.p99 = src.p99 != null ? src.p99 : null;
     out.maxHist = src.max != null ? src.max : null;
     out.d3 = obs.d3;
@@ -999,6 +1335,22 @@ async function hydroFor(env, lat, lon) {
     out.advice = w.advice;
     out.levelWord = ['normal', 'alto', 'alerta', 'evacuacion', 'grave'][out.level];
 
+    /* Sin umbrales de referencia, o con una lectura vieja, no se puede decir
+       que el río esté bajo. La falta de dato no se traduce en calma. */
+    const stale = obs.ageH != null && obs.ageH > 24;
+    if (out.level == null || stale) {
+      out.stale = !!stale;
+      const d0 = String(obs.date).slice(0, 10).split('-');
+      out.headline = stale ? 'Sin dato actualizado del río' : 'Sin dato suficiente del río';
+      out.plain = stale
+        ? 'La última medición de esta estación es del ' + d0[2] + '/' + d0[1] + '.'
+        : 'Hay una lectura, pero la estación no tiene historial suficiente para compararla.';
+      out.detail = 'No convertimos la falta de referencia en tranquilidad.';
+      out.advice = 'Si estás cerca del agua, mirá cómo está y no cruces zonas anegadas.';
+      out.levelWord = 'sin_dato';
+      out.level = null;
+    }
+
     /* datos para el gráfico de la tarjeta */
     out.trend = obs.trend;
     out.peak = obs.peak;
@@ -1020,7 +1372,7 @@ async function hydroFor(env, lat, lon) {
   } else {
     /* ---- respaldo: modelo global GloFAS (solo si no hay lectura local) ---- */
     out.source = 'glofas';
-    const q = out.q, p90 = out.p90 || 0, p95 = out.p95 || 0;
+    const q = out.q, p90 = out.q90 || 0, p95 = out.q95 || 0;
     const ratio95 = (q != null && p95) ? q / p95 : 0;
     let score = 0;
     if (q != null && p90 && q >= p90) score += 1;
@@ -1032,6 +1384,11 @@ async function hydroFor(env, lat, lon) {
     out.ratio95 = Math.round(ratio95 * 100) / 100;
 
     const w = hydroWords(out.level, out);
+    /* sin estación y sin caudal modelado no se puede afirmar "bajo" */
+    if (out.now == null) {
+      w.headline = 'Sin dato del río';
+      w.line = 'No hay medición disponible para este río en este momento.';
+    }
     out.headline = w.headline;
     out.plain = w.line;
     out.detail = 'Estimado con un modelo regional: no hay medición directa cerca.';
@@ -1046,10 +1403,17 @@ async function hydroFor(env, lat, lon) {
 }
 
 /* ---------------- Pronóstico ---------------- */
-async function forecast(place) {
+async function forecast(env, place) {
+  /* misma zona, misma consulta: el cron atiende varios suscriptores y no
+     tiene por qué pedir el mismo ensemble una vez por cada uno */
+  const la = snap10(place.lat), lo = snap10(place.lon);
+  const ckey = 'fc/' + la + ',' + lo;
+  const hit = await cGet(ckey, 20 * 60 * 1000);
+  if (hit && hit.hourly) return hit.hourly;
+
   const u = new URL('https://ensemble-api.open-meteo.com/v1/ensemble');
-  u.searchParams.set('latitude', place.lat);
-  u.searchParams.set('longitude', place.lon);
+  u.searchParams.set('latitude', la);
+  u.searchParams.set('longitude', lo);
   u.searchParams.set('hourly', 'precipitation,wind_gusts_10m');
   u.searchParams.set('models', 'ecmwf_ifs025');
   u.searchParams.set('forecast_hours', '4');
@@ -1059,6 +1423,7 @@ async function forecast(place) {
   if (!r.ok) throw new Error('open-meteo HTTP ' + r.status);
   const j = await r.json();
   if (!j.hourly) throw new Error('sin datos');
+  await cPut(ckey, { hourly: j.hourly }, 1800);
   return j.hourly;
 }
 
@@ -1066,18 +1431,30 @@ function probabilities(H) {
   const ids = Object.keys(H)
     .filter(k => /^precipitation_member\d+$/.test(k))
     .map(k => k.replace('precipitation_member', ''));
+  /* Un miembro sin dato no es un miembro con cero lluvia: si se contara
+     como cero, un ensemble incompleto diría "calma" sin respaldo. */
   const sum3 = key => {
     const a = H[key] || [];
-    return (a[0] ?? 0) + (a[1] ?? 0) + (a[2] ?? 0);
+    let s = 0, any = false;
+    for (let i = 0; i < 3; i++) {
+      const v = a[i];
+      if (v != null) { s += v; any = true; }
+    }
+    return any ? s : null;
   };
-  const rains = ids.map(id => sum3('precipitation_member' + id));
+  const rawRains = ids.map(id => sum3('precipitation_member' + id));
+  const known = rawRains.filter(v => v != null).length;
+  const rains = rawRains.filter(v => v != null);
   const gusts = ids.map(id => {
-    const a = (H['wind_gusts_10m_member' + id] || []).slice(0, 3);
-    return a.length ? Math.max(...a.map(v => v ?? 0)) : 0;
-  });
+    const a = (H['wind_gusts_10m_member' + id] || []).slice(0, 3).filter(v => v != null);
+    return a.length ? Math.max(...a) : null;
+  }).filter(v => v != null);
   const p = (arr, th) => arr.length ? arr.filter(v => v >= th).length / arr.length : 0;
   return {
-    n: ids.length,
+    n: ids.length, known,
+    /* conteos internos por umbral: no se muestran al usuario */
+    n15: rains.filter(v => v >= 15).length,
+    n30: rains.filter(v => v >= 30).length,
     rain15: p(rains, 15), rain30: p(rains, 30), rain60: p(rains, 60), rain100: p(rains, 100),
     gust60: p(gusts, 60), gust80: p(gusts, 80), gust100: p(gusts, 100), gust130: p(gusts, 130)
   };
@@ -1109,6 +1486,13 @@ function phenomenon(pb) {
   return { word: 'ráfagas', emoji: '💨' };
 }
 
+function durText(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), r = m % 60;
+  return h + ' h' + (r ? ' ' + r + ' min' : '');
+}
+
 function quietNow() {
   const h = Number(new Intl.DateTimeFormat('es-AR', {
     timeZone: 'America/Argentina/Cordoba', hour: 'numeric', hour12: false
@@ -1117,6 +1501,11 @@ function quietNow() {
 }
 
 /* ---------------- Push ---------------- */
+function horaReporte() {
+  /* misma hora que muestra el encabezado de la app */
+  return new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+}
+
 async function sendPush(env, sub, title, body, tag, kind = 'alert', level = 0) {
   const vapid = {
     subject: env.VAPID_SUBJECT,
@@ -1124,7 +1513,7 @@ async function sendPush(env, sub, title, body, tag, kind = 'alert', level = 0) {
     privateKey: env.VAPID_PRIVATE
   };
   const payload = await buildPushPayload(
-    { data: JSON.stringify({ title, body, tag, kind, level, url: '/' }), options: { ttl: 3600, urgency: 'high' } },
+    { data: JSON.stringify({ title, body: body + ' \u00b7 ' + horaReporte(), tag, kind, level, icon: '/icon-192.png', badge: '/notif-96.png', url: '/' }), options: { ttl: 3600, urgency: 'high' } },
     sub,
     vapid
   );
@@ -1134,7 +1523,174 @@ async function sendPush(env, sub, title, body, tag, kind = 'alert', level = 0) {
   return 'ok';
 }
 
+/* ---------------- Vigilancia del sistema ----------------
+   No depende de ninguna computadora: lo corre el mismo cron de Cloudflare y
+   avisa por push sólo a los teléfonos marcados como "avisos técnicos". */
+async function healthData(env) {
+  const now = Date.now();
+  let hb = null, hba = null;
+  try { hb = await env.SUBS.get('hb:cron', 'json'); } catch (e) { hb = null; }
+  try { hba = await env.SUBS.get('hb:acum', 'json'); } catch (e) { hba = null; }
+  const cronMin = hb && hb.at ? Math.round((now - hb.at) / 60000) : null;
+
+  let acumMin = null, acumKey = null;
+  for (let i = 0; i < 4 && acumMin == null; i++) {
+    const k = 'acum/v1/' + new Date(now - i * 3600000).toISOString().slice(0, 13) + '.json';
+    try {
+      const o = await env.NOWCAST.head(k);
+      if (o && o.uploaded) { acumKey = k; acumMin = Math.round((now - o.uploaded.getTime()) / 60000); }
+    } catch (e) { }
+  }
+  /* si R2 no contesta, el latido del acumulador dice lo mismo */
+  if (acumMin == null && hba && hba.at) {
+    acumMin = Math.round((now - hba.at) / 60000);
+    acumKey = hba.key || null;
+  }
+
+  const cronOk = cronMin == null ? null : cronMin <= 25;
+  const acumOk = acumMin != null && acumMin <= 100;
+  return {
+    ok: acumOk && (cronOk === null ? true : cronOk),
+    cronOk, acumOk, cronMin, acumMin, acumKey,
+    cron: hb && hb.at ? new Date(hb.at).toISOString() : null
+  };
+}
+
+async function pushOwner(env, title, body) {
+  let cursor = null, enviados = 0;
+  do {
+    let page = null;
+    try { page = await env.SUBS.list({ prefix: 'sub:', cursor }); } catch (e) { break; }
+    for (const k of page.keys || []) {
+      let rec = null;
+      try { rec = await env.SUBS.get(k.name, 'json'); } catch (e) { rec = null; }
+      if (!rec || !rec.owner || !rec.sub) continue;
+      const r = await sendPush(env, rec.sub, title, body, 'sistema');
+      if (r === 'ok') enviados++;
+    }
+    cursor = page.list_complete ? null : page.cursor;
+  } while (cursor);
+  return enviados;
+}
+
+async function vigilar(env) {
+  const h = await healthData(env);
+  let st = null;
+  try { st = await env.SUBS.get('tech:state', 'json'); } catch (e) { st = null; }
+  const now = Date.now();
+
+  if (!h.ok) {
+    /* un aviso cada 6 h como máximo, para no volverse molesto */
+    if (!(st && st.failing && st.at && now - st.at < 6 * 3600 * 1000)) {
+      const cuanto = h.acumMin == null ? 'un rato' : h.acumMin + ' minutos';
+      await pushOwner(env, '⚙️ ASN · algo dejó de actualizar',
+        `Los datos no se están guardando desde hace ${cuanto}. Las alertas pueden estar viejas.`);
+      try { await env.SUBS.put('tech:state', JSON.stringify({ failing: true, at: now })); } catch (e) { }
+    }
+  } else if (st && st.failing) {
+    await pushOwner(env, '⚙️ ASN · volvió a la normalidad',
+      'Los datos se están actualizando otra vez.');
+    try { await env.SUBS.put('tech:state', JSON.stringify({ failing: false, at: now })); } catch (e) { }
+  }
+}
+
+/* ---------------- Acta de auditoría ----------------
+   No decide alertas: deja constancia, hora por hora, de qué respondió cada
+   fuente, con qué antigüedad, y si el sistema es coherente consigo mismo.
+   Veredicto por fuente: confirmado / sin dato / contradicho. */
+async function auditData(env) {
+  const now = Date.now();
+  const fuentes = [];
+
+  const h = await healthData(env);
+  fuentes.push({
+    fuente: 'cron',
+    estado: h.cronOk === false ? 'contradicho' : h.cronOk === null ? 'sin_dato' : 'confirmado',
+    edad_min: h.cronMin,
+    detalle: h.cron || 'sin latido'
+  });
+  fuentes.push({
+    fuente: 'acumulador_lluvia',
+    estado: h.acumOk ? 'confirmado' : 'contradicho',
+    edad_min: h.acumMin,
+    detalle: h.acumKey || 'sin objeto en R2'
+  });
+
+  const punto = { lat: -31.42, lon: -64.19 };
+  try {
+    const hourly = await forecast(env, punto);
+    const pb = probabilities(hourly);
+    fuentes.push({
+      fuente: 'ensemble_ecmwf',
+      estado: pb.known ? 'confirmado' : 'sin_dato',
+      edad_min: 0,
+      detalle: pb.known
+        ? pb.known + ' miembros · ' + Math.round(pb.rain15 * 100) + '% ve más de 15 mm en 3 h'
+        : 'sin miembros con dato'
+    });
+  } catch (e) {
+    fuentes.push({ fuente: 'ensemble_ecmwf', estado: 'sin_dato', edad_min: null, detalle: 'HTTP ' + (e.message || 'error') });
+  }
+
+  try {
+    const hy = await hydroFor(env, punto.lat, punto.lon);
+    /* un nivel de decenas de metros en Córdoba es imposible: si aparece, la
+       estación emparejada no corresponde a la zona y no se puede dar por bueno */
+    const absurdo = hy && hy.now != null && hy.now > 10;
+    fuentes.push({
+      fuente: 'nivel_rio',
+      estado: !hy || hy.now == null ? 'sin_dato' : absurdo ? 'contradicho' : 'confirmado',
+      edad_min: null,
+      detalle: hy && hy.now != null
+        ? (hy.river || 'estación') + ' · ' + hy.now.toFixed(2) + ' m' +
+          (absurdo ? ' · fuera de rango para esta zona' : '')
+        : 'sin lectura'
+    });
+  } catch (e) {
+    fuentes.push({ fuente: 'nivel_rio', estado: 'sin_dato', edad_min: null, detalle: 'falló la consulta' });
+  }
+
+  /* coherencia interna: si el cron late pero el acumulador no, algo se rompió */
+  const cronOk = fuentes.find(f => f.fuente === 'cron').estado;
+  const acumOk = fuentes.find(f => f.fuente === 'acumulador_lluvia').estado;
+  const cruces = [{
+    cruce: 'cron vs acumulador',
+    resultado: cronOk === 'confirmado' && acumOk !== 'confirmado' ? 'contradicho' : 'coherente',
+    nota: cronOk === 'confirmado' && acumOk !== 'confirmado'
+      ? 'el ciclo corre pero no guarda'
+      : 'sin contradicción'
+  }];
+
+  const contradichas = fuentes.filter(f => f.estado === 'contradicho').length +
+    cruces.filter(c => c.resultado === 'contradicho').length;
+
+  return {
+    hora: new Date(now).toISOString().slice(0, 13) + ':00Z',
+    ok: contradichas === 0 && fuentes.every(f => f.estado !== 'sin_dato'),
+    contradichas,
+    fuentes, cruces
+  };
+}
+
+async function guardarActa(env) {
+  try {
+    const a = await auditData(env);
+    const k = 'audit/' + a.hora.slice(0, 13) + '.json';
+    await env.NOWCAST.put(k, JSON.stringify(a), { httpMetadata: { contentType: 'application/json' } });
+    return a;
+  } catch (e) { return null; }
+}
+
 async function runAlerts(env) {
+  /* el nowcast se lee una sola vez por corrida: si está viejo, no se usa */
+  let nc = null, ncOk = false;
+  try {
+    const o = await env.NOWCAST.get('nowcast.json');
+    if (o) {
+      nc = JSON.parse(await o.text());
+      ncOk = !!(nc.generado && Date.now() - Date.parse(nc.generado) < 30 * 60 * 1000);
+    }
+  } catch (e) { nc = null; }
   const list = await env.SUBS.list({ prefix: 'sub:' });
   for (const k of list.keys) {
     const raw = await env.SUBS.get(k.name);
@@ -1146,34 +1702,62 @@ async function runAlerts(env) {
     for (const p of rec.places) {
       const tag = p.name || (p.lat + ',' + p.lon);
       try {
-        const pb = probabilities(await forecast(p));
-        const level = levelOf(pb);
-        const prev = rec.last[tag] ?? -1;
-        const prevPh = (rec.ph && rec.ph[tag]) || '';
-        const at = rec.at[tag] ?? 0;
-        const ph = phenomenon(pb);
-        const quietBlock = quietNow() && level < 3;
+        const pb = probabilities(await forecast(env, p));
+        /* Sin miembros con dato no hay dictamen del clima: ni alerta
+           inventada ni un "bajó la alerta" falso. Se deja el último estado
+           conocido y se sigue con el río, que se mide aparte. */
+        if (pb.known) {
+          const level = levelOf(pb);
+          const prev = rec.last[tag] ?? -1;
+          const prevPh = (rec.ph && rec.ph[tag]) || '';
+          const at = rec.at[tag] ?? 0;
+          const ph = phenomenon(pb);
+          const quietBlock = quietNow() && level < 3;
 
-        const changed = level !== prev || ph.word !== prevPh;
-        const repeatMin = Number(env.REPEAT_MIN || 30);
-        const repeatDue = level >= 1 && Date.now() - at >= repeatMin * 60 * 1000;
-        const recovered = prev >= 1 && level === 0;
-        const should = (level >= 1 && (changed || repeatDue)) || recovered;
+          const changed = level !== prev || ph.word !== prevPh;
+          const repeatMin = Number(env.REPEAT_MIN || 30);
+          const repeatDue = level >= 1 && Date.now() - at >= repeatMin * 60 * 1000;
+          const recovered = prev >= 1 && level === 0;
+          const should = (level >= 1 && (changed || repeatDue)) || recovered;
 
-        if (should && !quietBlock) {
-          const r = recovered
-            ? await sendPush(env, rec.sub, `🟢 Sin alerta en ${tag}`, 'Bajó la alerta. Podés seguir con normalidad.', tag)
-            : await sendPush(
-              env, rec.sub,
-              `${LEVELS[level].emoji} ${LEVELS[level].name} · ${ph.emoji} ${ph.word} en ${tag}`,
-              `${ph.word} en las próximas 3 horas. Abrí ASN para ver el detalle.`,
-              tag, ph.key, level
-            );
-          if (r === 'gone') { gone = true; break; }
-          if (r === 'ok') rec.at[tag] = Date.now();
+          rec.since = rec.since || {};
+          if (level >= 1 && prev < 1) rec.since[tag] = Date.now();
+          const since = rec.since[tag] || 0;
+          /* el aviso habla de lo que va a pasar, no de cómo lo calculamos */
+          const sigue = level >= 1 && since && Date.now() - since > 10 * 60000
+            ? ' Sigue desde hace ' + durText(Date.now() - since) + '.'
+            : '';
+
+          if (should && !quietBlock) {
+            const r = recovered
+              ? await sendPush(env, rec.sub, `🟢 Sin alerta en ${tag}`,
+                'Bajó la alerta: el pronóstico ya no muestra lluvia ni viento fuerte. Podés seguir con normalidad.', tag)
+              : await sendPush(
+                env, rec.sub,
+                `${LEVELS[level].emoji} ${LEVELS[level].name} · ${ph.emoji} ${ph.word} en ${tag}`,
+                `${ph.word} en las próximas 3 horas.${sigue} Abrí ASN para ver el detalle.`,
+                tag, ph.key, level
+              );
+            if (r === 'gone') { gone = true; break; }
+            if (r === 'ok') rec.at[tag] = Date.now();
+          }
+          if (recovered) delete rec.since[tag];
+          rec.last = rec.last || {};
+          rec.ph = rec.ph || {};
+          rec.last[tag] = level;
+          rec.ph[tag] = ph.word;
         }
-        if (p.hydro) {
-          const h = await hydroFor(env, p.lat, p.lon);
+        /* Se consulta el rio para cualquier lugar, no solo los marcados: si no,
+           una crecida real puede no avisar nunca. Cacheado 30 min. */
+        let h = null;
+        try { h = await env.SUBS.get('nh:' + tag, 'json'); } catch (e) { h = null; }
+        if (!h || Date.now() - (h.at || 0) > 30 * 60 * 1000) {
+          try {
+            h = await hydroFor(env, p.lat, p.lon);
+            if (h) { h.at = Date.now(); await env.SUBS.put('nh:' + tag, JSON.stringify(h), { expirationTtl: 3600 }); }
+          } catch (e) { h = null; }
+        }
+        if (h && h.level != null) {
           const hk = tag + ':hydro';
           const hPrev = (rec.hydroLast && rec.hydroLast[hk]) || 0;
           const hQuiet = quietNow() && h.level < 2;
@@ -1207,7 +1791,7 @@ async function runAlerts(env) {
               env, rec.sub,
               `🌊 El río empezó a bajar · ${h.river || 'río cercano'}`,
               `${h.trendTxt || ''} Sigue alto, pero ya no sube. ` +
-              `Todavía no vuelvas si saliste. Cerca de ${tag}.`,
+              `Seguí las indicaciones de Defensa Civil. Cerca de ${tag}.`,
               'hydro-' + hk, 'flood', h.level
             );
             if (r3 === 'gone') { gone = true; break; }
@@ -1229,9 +1813,29 @@ async function runAlerts(env) {
           rec.hydroLast[hk] = h.level;
         }
 
-        rec.last[tag] = level;
-        rec.ph = rec.ph || {};
-        rec.ph[tag] = ph.word;
+        /* 4) tormenta en camino: solo con confianza alta y dato fresco.
+           La ETA se calcula para ESTE lugar. Antes se tomaba m.llega[0],
+           que es la primera ciudad de una lista fija y podía ser otra. */
+        if (ncOk && Array.isArray(nc.tormentas)) {
+          for (const s of nc.tormentas) {
+            const near = etaForPlace(p, s);
+            if (!near || near.overhead) continue;
+            const dkm = near.km;
+            const sk = 'st:' + Math.round(s.lat * 10) + ',' + Math.round(s.lon * 10);
+            rec.storm = rec.storm || {};
+            if (Date.now() - (rec.storm[sk] || 0) < 60 * 60 * 1000) continue;
+            const r5 = await sendPush(
+              env, rec.sub,
+              `⛈ Tormenta a ${dkm} km de ${tag}`,
+              `Llega en unos ${near.etaMin} minutos. Guardá lo que esté afuera.`,
+              'storm-' + sk, 'storm', 2
+            );
+            if (r5 === 'gone') { gone = true; break; }
+            if (r5 === 'ok') rec.storm[sk] = Date.now();
+          }
+          if (gone) break;
+        }
+
       } catch (e) {
         console.log('error', tag, e.message);
       }
@@ -1249,6 +1853,426 @@ async function runAlerts(env) {
 
 
 
+
+
+
+
+
+
+/* ---------------- Tarjeta de cuenca ----------------
+   Cinco señales medidas. Tres estados. Ninguna predicción de altura.
+   Si no alcanza el dato, se dice: no se da la cuenca por tranquila. */
+const ARCGIS_EST = 'https://services1.arcgis.com/atxllciEI8CHWvwW/arcgis/rest/services/Estaciones_ultimamedicion_Publico/FeatureServer/0/query';
+const CAMPOS_CUENCA = 'Codigo,Nombre,PropietarioEstacion,Latitud,Longitud,Lluvia_mm_1hs,Lluvia_mm_3hs,Lluvia_mm_6hs,Lluvia_mm_24hs,Lluvia_mm_7dias,Nivel_m,Nivel,Precipitacion,UltimaActualizacion,HorasSinRegistro,UnidadGestionHidrico';
+
+function puntoEnAnillo(lon, lat, anillo) {
+  let dentro = false;
+  for (let i = 0, j = anillo.length - 1; i < anillo.length; j = i++) {
+    const xi = anillo[i][0], yi = anillo[i][1];
+    const xj = anillo[j][0], yj = anillo[j][1];
+    if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) dentro = !dentro;
+  }
+  return dentro;
+}
+
+function cuencaDePunto(lon, lat) {
+  for (const c of CUENCAS) {
+    for (const anillo of c.r) if (puntoEnAnillo(lon, lat, anillo)) return c;
+  }
+  /* Un punto puede caer justo sobre el borde del polígono (Córdoba centro
+     queda exactamente en el límite este). Se prueba el entorno inmediato
+     antes de decir que no hay cuenca: 0,02° son unos 2 km. */
+  for (const d of [0.02, 0.04]) {
+    for (const [dx, dy] of [[0, d], [0, -d], [d, 0], [-d, 0], [d, d], [-d, -d], [d, -d], [-d, d]]) {
+      for (const c of CUENCAS) {
+        for (const anillo of c.r) {
+          if (puntoEnAnillo(lon + dx, lat + dy, anillo)) return c;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+const aNum = v => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+const promedio = a => {
+  const v = a.filter(x => x != null);
+  return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null;
+};
+const unDecimal = v => (v == null ? null : Math.round(v * 10) / 10);
+
+async function cuencaFor(env, lat, lon) {
+  const c = cuencaDePunto(lon, lat);
+  if (!c) {
+    return {
+      ok: false, estado: 'sin_cuenca',
+      texto: {
+        titulo: 'Fuera de una cuenca trazada',
+        cuerpo: 'Todavía no tenemos las cuencas dibujadas para este punto. No damos información de río acá.'
+      }
+    };
+  }
+
+  /* El servicio rechaza consultas por punto + distancia ("SRID is not valid"),
+     pero acepta envelope. Se pide el rectángulo que contiene la cuenca y
+     después se filtra por polígono, que es lo que realmente importa. */
+  let xmin = 180, xmax = -180, ymin = 90, ymax = -90;
+  for (const anillo of c.r) {
+    for (const [x, y] of anillo) {
+      if (x < xmin) xmin = x;
+      if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
+    }
+  }
+  const u = new URL(ARCGIS_EST);
+  u.searchParams.set('where', '1=1');
+  u.searchParams.set('geometry', JSON.stringify({
+    xmin, ymin, xmax, ymax, spatialReference: { wkid: 4326 }
+  }));
+  u.searchParams.set('geometryType', 'esriGeometryEnvelope');
+  u.searchParams.set('inSR', '4326');
+  u.searchParams.set('spatialRel', 'esriSpatialRelIntersects');
+  u.searchParams.set('outFields', CAMPOS_CUENCA);
+  u.searchParams.set('returnGeometry', 'false');
+  u.searchParams.set('resultRecordCount', '1000');
+  u.searchParams.set('f', 'json');
+
+  let filas = [];
+  let fuenteOk = true;
+  let errorFuente = null;
+  try {
+    const r = await fetch(u.toString(), { cf: { cacheTtl: 240, cacheEverything: true } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || 'error del servicio');
+    filas = (j.features || []).map(f => f.attributes);
+  } catch (e) {
+    fuenteOk = false;
+    errorFuente = String((e && e.message) || e);
+  }
+
+  /* solo las que caen dentro del polígono de ESTA cuenca */
+  const dentro = fuenteOk
+    ? filas.filter(a => c.r.some(anillo => puntoEnAnillo(aNum(a.Longitud), aNum(a.Latitud), anillo)))
+    : [];
+
+  const pluv = dentro.filter(a => a.Precipitacion === 'SI');
+  /* "informando" exige dato fresco. Si no, una estación que dejó de reportar
+     hace días seguiría contando con su último valor y la cobertura mentiría. */
+  const informan = pluv.filter(a =>
+    aNum(a.Lluvia_mm_24hs) != null && (aNum(a.HorasSinRegistro) ?? 99) <= 3);
+  const cobertura = pluv.length ? informan.length / pluv.length : 0;
+
+  const mm1 = promedio(informan.map(a => aNum(a.Lluvia_mm_1hs)));
+  const mm3 = promedio(informan.map(a => aNum(a.Lluvia_mm_3hs)));
+  const mm6 = promedio(informan.map(a => aNum(a.Lluvia_mm_6hs)));
+  const mm24 = promedio(informan.map(a => aNum(a.Lluvia_mm_24hs)));
+  const mm7 = promedio(informan.map(a => aNum(a.Lluvia_mm_7dias)));
+  const max1 = informan.length
+    ? Math.max(...informan.map(a => aNum(a.Lluvia_mm_1hs) ?? 0))
+    : null;
+
+  /* nivel: solo estaciones con nivel y dato fresco */
+  const nivelSt = dentro
+    .filter(a => a.Nivel === 'SI' && aNum(a.Nivel_m) != null && (aNum(a.HorasSinRegistro) ?? 99) <= 6)
+    .sort((x, y) => (aNum(x.HorasSinRegistro) ?? 99) - (aNum(y.HorasSinRegistro) ?? 99));
+  const nivel = nivelSt.length
+    ? {
+      estacion: String(nivelSt[0].Nombre || '').trim(),
+      m: unDecimal(aNum(nivelSt[0].Nivel_m)),
+      horasSinRegistro: aNum(nivelSt[0].HorasSinRegistro)
+    }
+    : null;
+
+  const edades = dentro.map(a => aNum(a.UltimaActualizacion)).filter(x => x != null && x > 0);
+  const edadMin = edades.length ? Math.round((Date.now() - Math.max(...edades)) / 60000) : null;
+
+  let estado;
+  if (!fuenteOk || cobertura < 0.5) estado = 'sin_dato';
+  else if ((mm1 != null && mm1 >= 4) || (mm3 != null && mm3 >= 10)) estado = 'lluvia';
+  else estado = 'normal';
+
+  const n = informan.length, t = pluv.length;
+
+  /* Subida esperada y detalle. El rango sale del registro medido de la cuenca;
+     el volumen y el caudal, del coeficiente de escorrentía sobre el área.
+     Sin lluvia no se anuncia subida. */
+  const nd = NIVEL_CUENCA[String(c.id)];
+  let altura = null, detalle = null;
+  if (nd) {
+    const p24 = mm24 ?? 0;
+    let bajo, alto;
+    if (p24 < 5) { bajo = 0; alto = nd.rise_min_m; }
+    else if (p24 < 20) { bajo = 0.05; alto = nd.rise_min_m; }
+    else { bajo = nd.rise_min_m; alto = nd.rise_max_m; }
+    altura = {
+      normal_m: nd.normal_m,
+      bajo_m: unDecimal(bajo),
+      alto_m: unDecimal(alto),
+      dias_registro: nd.dias,
+      nota: nd.nota
+    };
+    const vb = nd.c_bajo * p24 * nd.area_km2 / 1000;
+    const va = nd.c_alto * p24 * nd.area_km2 / 1000;
+    detalle = {
+      volumen_hm3: [unDecimal(vb), unDecimal(va)],
+      caudal_ls: [Math.round(vb * 1e6 / 86400), Math.round(va * 1e6 / 86400)],
+      tiempo_cuenca_h: [3, 5],
+      tiempo_abajo_h: [12, 24],
+      metodo: 'Coeficiente de escorrentía 0,169 a 0,510 sobre 531,7 km²'
+    };
+  }
+  const texto = estado === 'sin_dato'
+    ? {
+      titulo: 'Sin dato suficiente',
+      cuerpo: fuenteOk
+        ? 'Informan ' + n + ' de ' + t + ' pluviómetros de esta cuenca.'
+        : 'No pudimos leer la red de pluviómetros.',
+      pie: 'No damos la cuenca por tranquila. Si estás cerca de un arroyo, mirá cómo está.'
+    }
+    : estado === 'lluvia'
+      ? {
+        titulo: 'Está lloviendo sobre la cuenca',
+        cuerpo: 'Cayeron ' + (unDecimal(mm3) ?? 0) + ' mm en 3 horas y ' + (unDecimal(mm24) ?? 0) + ' mm en 24 horas.',
+        pie: 'El agua ya cayó en la cuenca. No estimamos a qué altura llegará el río.'
+      }
+      : {
+        titulo: 'Sin lluvia significativa',
+        cuerpo: 'En 3 horas cayeron ' + (unDecimal(mm3) ?? 0) + ' mm sobre la cuenca.',
+        pie: 'Es lo medido por los pluviómetros, no un pronóstico.'
+      };
+
+  return {
+    ok: true,
+    estado,
+    cuenca: { nombre: c.n, areaKm2: c.area },
+    lluvia: {
+      mm1h: unDecimal(mm1), mm3h: unDecimal(mm3), mm6h: unDecimal(mm6),
+      mm24h: unDecimal(mm24), mm7d: unDecimal(mm7), max1h: unDecimal(max1)
+    },
+    red: { pluviometros: t, informando: n, cobertura: Math.round(cobertura * 100) },
+    nivel,
+    altura,
+    detalle,
+    edadMin,
+    motivo: fuenteOk ? null : (errorFuente || 'fuente no disponible'),
+    texto,
+    trazabilidad: [
+      { fuente: 'Pluviómetros SGA / INA-CIRSA / APRHI (ArcGIS provincial)', estaciones: t, informando: n },
+      { fuente: 'Nivel hidrométrico del mismo servicio', estaciones: nivelSt.length },
+      { leidoHaceMin: edadMin }
+    ]
+  };
+}
+
+/* ---------------- Acumulador horario ----------------
+   Las tablas publicas de nivel horario guardan solo una ventana movil de 57
+   horas. Sin archivo propio no hay forma de calibrar cuanto tarda el agua en
+   llegar. Esto guarda una foto por hora en R2: un objeto por hora, sin
+   reescrituras, para que no haya conflictos entre ejecuciones. */
+const ARCGIS_VIVO = 'https://services1.arcgis.com/atxllciEI8CHWvwW/arcgis/rest/services/Estaciones_ultimamedicion_Publico/FeatureServer/0/query';
+
+/* Lluvia de la cuenca alta del Paraná (Brasil). Se calcula una vez por hora
+   en el cron, no en la tarjeta: cuatro consultas seguidas colgaban la app. */
+const PTS_BRASIL = [[-20.5, -51.5], [-22.5, -52.9], [-24, -54.2], [-25.5, -54.6]];
+
+async function acumularBrasil(env) {
+  if (!env.NOWCAST) return null;
+  const hora = new Date().toISOString().slice(0, 13);
+  const key = 'acum/brasil/' + hora + '.json';
+  const ya = await env.NOWCAST.head(key);
+  if (ya) {
+    /* si ya existe, igual hay que dejarla en KV: si no, la lectura
+       vuelve al listado de R2 y tarda decenas de segundos. */
+    try {
+      const o = await env.NOWCAST.get(key);
+      if (o && env.SUBS) await env.SUBS.put('brasil:latest', await o.text(), { expirationTtl: 604800 });
+    } catch (e) { }
+    return { hora, existia: true };
+  }
+
+  const fin = new Date().toISOString().slice(0, 10);
+  const ini = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  let acc = 0, n = 0;
+  for (const [la, lo] of PTS_BRASIL) {
+    try {
+      const u = 'https://archive-api.open-meteo.com/v1/archive?latitude=' + la +
+        '&longitude=' + lo + '&start_date=' + ini + '&end_date=' + fin +
+        '&daily=precipitation_sum&timezone=America/Sao_Paulo';
+      const r = await fetch(u, { cf: { cacheTtl: 43200, cacheEverything: true } });
+      const j = await r.json();
+      const v = ((j.daily || {}).precipitation_sum || []).filter(x => x != null);
+      if (v.length) { acc += v.reduce((a, b) => a + b, 0) / v.length; n++; }
+    } catch (e) { }
+  }
+  if (n < 3) return { hora, error: 'pocos puntos' };
+
+  const payload = {
+    hora,
+    mm30: Math.round(acc / n),
+    puntos: n,
+    desde: ini,
+    hasta: fin,
+    rezago_dias: 5,
+    correlacion: 0.55,
+    nota: 'Lluvia de la cuenca alta del Paraná. El nivel de Itatí responde en unos 5 días.'
+  };
+  await env.NOWCAST.put(key, JSON.stringify(payload), { httpMetadata: { contentType: 'application/json' } });
+  if (env.SUBS) await env.SUBS.put('brasil:latest', JSON.stringify(payload), { expirationTtl: 604800 });
+  return { hora, mm30: payload.mm30 };
+}
+
+async function acumular(env) {
+  if (!env.NOWCAST) return null;
+  const hora = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
+  const key = 'acum/v1/' + hora + '.json';
+
+  const ya = await env.NOWCAST.head(key);
+  if (ya) return { hora, existia: true };
+
+  const u = new URL(ARCGIS_VIVO);
+  u.searchParams.set('where', '1=1');
+  u.searchParams.set('outFields', 'Codigo,Lluvia_mm_1hs,Lluvia_mm_24hs,Nivel_m,HorasSinRegistro');
+  u.searchParams.set('returnGeometry', 'false');
+  u.searchParams.set('resultRecordCount', '2000');
+  u.searchParams.set('f', 'json');
+
+  const r = await fetch(u.toString(), { cf: { cacheTtl: 60, cacheEverything: true } });
+  if (!r.ok) return { hora, error: 'HTTP ' + r.status };
+  const j = await r.json();
+  if (j.error) return { hora, error: j.error.message || 'error del servicio' };
+
+  const d = [];
+  for (const f of (j.features || [])) {
+    const a = f.attributes;
+    const ll = a.Lluvia_mm_1hs == null ? null : Math.round(a.Lluvia_mm_1hs * 10) / 10;
+    const ni = a.Nivel_m == null ? null : Math.round(a.Nivel_m * 100) / 100;
+    if (ll == null && ni == null) continue;
+    d.push([String(a.Codigo), ll, ni]);
+  }
+
+  await env.NOWCAST.put(key, JSON.stringify({ hora, n: d.length, d }), {
+    httpMetadata: { contentType: 'application/json' }
+  });
+  /* latido pegado al trabajo real: si la foto se guardó, esto se escribe */
+  try { await env.SUBS.put('hb:acum', JSON.stringify({ at: Date.now(), key })); } catch (e) { }
+  return { hora, n: d.length };
+}
+
+/* ---------------- Motor de dictamen ----------------
+   Cada fuente responde la misma pregunta por separado: "¿viene agua?".
+   El dictamen solo se emite si hay suficientes fuentes válidas y coinciden.
+   Si no coinciden, se devuelve "señales divididas", no un promedio.
+   Cada voto queda listado para que se pueda auditar de dónde salió. */
+async function dictamen(env, lat, lon) {
+  const [cue, hyd] = await Promise.all([
+    cuencaFor(env, lat, lon).catch(() => null),
+    hydroFor(env, lat, lon).catch(() => null)
+  ]);
+
+  const votos = [];
+
+  /* 1. Lluvia medida por pluviómetros sobre la cuenca */
+  if (cue && cue.ok && cue.red && (cue.red.cobertura || 0) >= 50) {
+    const mm = cue.lluvia.mm24h ?? 0;
+    votos.push({
+      fuente: 'Lluvia medida en la cuenca',
+      valor: mm,
+      unidad: 'mm/24h',
+      voto: mm >= 20 ? 2 : mm >= 5 ? 1 : 0,
+      detalle: cue.red.informando + ' de ' + cue.red.pluviometros + ' pluviómetros'
+    });
+  } else {
+    votos.push({ fuente: 'Lluvia medida en la cuenca', voto: null, detalle: 'sin cobertura suficiente' });
+  }
+
+  /* 2. Nivel del río medido */
+  if (hyd && hyd.level != null) {
+    votos.push({
+      fuente: 'Nivel del río',
+      valor: hyd.now,
+      unidad: 'm',
+      voto: hyd.level >= 2 ? 2 : hyd.level >= 1 ? 1 : 0,
+      detalle: hyd.river || 'estación cercana'
+    });
+  } else {
+    votos.push({ fuente: 'Nivel del río', voto: null, detalle: 'sin medición' });
+  }
+
+  /* 3. Suba esperada por el modelo de escorrentía */
+  if (cue && cue.ok && cue.altura) {
+    votos.push({
+      fuente: 'Suba esperada (escorrentía)',
+      valor: cue.altura.alto_m,
+      unidad: 'm',
+      voto: (cue.lluvia.mm24h ?? 0) >= 20 ? 2 : (cue.lluvia.mm24h ?? 0) >= 5 ? 1 : 0,
+      detalle: 'rango ' + cue.altura.bajo_m + ' a ' + cue.altura.alto_m + ' m'
+    });
+  } else {
+    votos.push({ fuente: 'Suba esperada (escorrentía)', voto: null, detalle: 'sin registro para esta cuenca' });
+  }
+
+  /* 4. Estado del suelo */
+  if (cue && cue.ok && cue.lluvia) {
+    const mm7 = cue.lluvia.mm7d ?? 0;
+    votos.push({
+      fuente: 'Suelo cargado',
+      valor: mm7,
+      unidad: 'mm/7d',
+      voto: mm7 >= 80 ? 2 : mm7 >= 40 ? 1 : 0,
+      detalle: 'acumulado de la semana'
+    });
+  } else {
+    votos.push({ fuente: 'Suelo cargado', voto: null, detalle: 'sin dato' });
+  }
+
+  const validos = votos.filter(v => v.voto != null);
+  const altos = validos.filter(v => v.voto >= 2).length;
+  const medios = validos.filter(v => v.voto === 1).length;
+  const acuerdo = validos.length ? Math.round(((altos + medios) * 100) / validos.length) : 0;
+
+  let estado, titulo, texto;
+  /* Una medición directa por encima del umbral de evacuación no se somete a
+     consenso: es un hecho medido. Si esperamos a que las demás fuentes
+     tengan dato, el motor calla justo cuando más importa. */
+  const medicionCritica = hyd && hyd.level != null && hyd.level >= 3;
+  if (medicionCritica) {
+    estado = 'agua_en_camino';
+    titulo = 'Viene agua';
+    texto = 'El nivel medido superó el umbral de alerta de esa estación. No hace falta consenso: es medición directa.';
+  } else if (validos.length < 2) {
+    estado = 'sin_dictamen';
+    titulo = 'Sin dictamen';
+    texto = 'No hay suficientes fuentes válidas para pronunciarse. No se da por tranquilo.';
+  } else if (altos >= Math.ceil(validos.length * 0.75)) {
+    estado = 'agua_en_camino';
+    titulo = 'Viene agua';
+    texto = altos + ' de ' + validos.length + ' fuentes coinciden en señal alta.';
+  } else if (altos + medios === 0) {
+    estado = 'sin_senal';
+    titulo = 'Sin señal de agua';
+    texto = 'Las ' + validos.length + ' fuentes válidas coinciden en que no hay agua en camino.';
+  } else if (acuerdo >= 75) {
+    estado = 'atencion';
+    titulo = 'Conviene mirar';
+    texto = 'Hay señales parciales: ' + (altos + medios) + ' de ' + validos.length + ' fuentes.';
+  } else {
+    estado = 'dividido';
+    titulo = 'Señales divididas';
+    texto = 'Las fuentes no coinciden. No se emite un dictamen único.';
+  }
+
+  return {
+    ok: true,
+    estado, titulo, texto,
+    acuerdo,
+    fuentes_validas: validos.length,
+    fuentes_totales: votos.length,
+    votos,
+    nota: 'El acuerdo entre fuentes no las vuelve independientes: comparten los mismos datos de base.'
+  };
+}
 
 
 
